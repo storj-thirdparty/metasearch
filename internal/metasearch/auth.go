@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"strings"
 
-	"storj.io/common/macaroon"
 	"storj.io/common/uuid"
 	"storj.io/storj/satellite"
-	"storj.io/storj/satellite/console"
+
+	"storj.io/uplink"
 )
 
 // Auth authenticates HTTP requests for metasearch
@@ -46,20 +46,33 @@ func (a *HeaderAuth) Authenticate(ctx context.Context, r *http.Request) (project
 	}
 
 	// Parse API token
-	rawToken := strings.TrimPrefix(hdr, "Bearer ")
-	apiKey, err := macaroon.ParseAPIKey(rawToken)
+	rawAccess := strings.TrimPrefix(hdr, "Bearer ")
+	access, err := uplink.ParseAccess(rawAccess)
 	if err != nil {
-		err = fmt.Errorf("%w: %s", ErrAuthorizationFailed, err)
+		err = fmt.Errorf("%w: cannot parse access token: %v", ErrAuthorizationFailed, err)
 		return
 	}
 
-	// Get projectId
-	var keyInfo *console.APIKeyInfo
-	keyInfo, err = a.db.Console().APIKeys().GetByHead(ctx, apiKey.Head())
-	if err != nil {
-		err = fmt.Errorf("%w: %s", ErrAuthorizationFailed, err)
-		return
+	config := uplink.Config{
+		UserAgent: "metasearch",
 	}
-	projectID = keyInfo.ProjectID
-	return
+
+	project, err := config.OpenProject(ctx, access)
+	if err != nil {
+		err = fmt.Errorf("%w: cannot open project: %v", ErrAuthorizationFailed, err)
+	}
+	defer project.Close()
+
+	return a.getProjectID(ctx, access)
+}
+
+// GetPublicID gets the public project ID for the given access grant.
+func (a *HeaderAuth) getProjectID(ctx context.Context, access *uplink.Access) (id uuid.UUID, err error) {
+	accessKey := accessGetAPIKey(access)
+	info, err := a.db.Console().APIKeys().GetByHead(ctx, accessKey.Head())
+	if err != nil {
+		return uuid.UUID{}, fmt.Errorf("%w: cannot find project by API key", ErrAuthorizationFailed)
+	}
+
+	return info.ProjectID, nil
 }
