@@ -34,6 +34,9 @@ type Server struct {
 type BaseRequest struct {
 	ProjectID uuid.UUID               `json:"-"`
 	Location  metabase.ObjectLocation `json:"-"`
+
+	Encryptor         PathEncryptor           `json:"-"`
+	EncryptedLocation metabase.ObjectLocation `json:"-"`
 }
 
 const defaultBatchSize = 100
@@ -104,7 +107,7 @@ func (s *Server) Run() error {
 
 func (s *Server) validateRequest(ctx context.Context, r *http.Request, baseRequest *BaseRequest, body interface{}) error {
 	// Parse authorization header
-	projectID, err := s.Auth.Authenticate(ctx, r)
+	projectID, encryptor, err := s.Auth.Authenticate(ctx, r)
 	if err != nil {
 		return err
 	}
@@ -120,10 +123,23 @@ func (s *Server) validateRequest(ctx context.Context, r *http.Request, baseReque
 	vars := mux.Vars(r)
 	bucket := vars["bucket"]
 	key := vars["key"]
+	baseRequest.Encryptor = encryptor
 	baseRequest.Location = metabase.ObjectLocation{
 		ProjectID:  projectID,
 		BucketName: metabase.BucketName(bucket),
 		ObjectKey:  metabase.ObjectKey(key),
+	}
+
+	// Encrypt location
+	encKey, err := encryptor.EncryptPath(bucket, key)
+	if err != nil {
+		return fmt.Errorf("%w: cannot encrypt path: %s", ErrInternalError, key)
+	}
+
+	baseRequest.EncryptedLocation = metabase.ObjectLocation{
+		ProjectID:  projectID,
+		BucketName: metabase.BucketName(bucket),
+		ObjectKey:  metabase.ObjectKey(encKey),
 	}
 
 	return nil
@@ -139,7 +155,7 @@ func (s *Server) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta, err := s.Repo.GetMetadata(ctx, request.Location)
+	meta, err := s.Repo.GetMetadata(ctx, request.EncryptedLocation)
 	if err != nil {
 		s.errorResponse(w, err)
 		return
@@ -230,6 +246,12 @@ func (s *Server) searchMetadata(ctx context.Context, request *SearchRequest) (re
 	var shouldInclude bool
 	response.Results = make([]SearchResult, 0)
 	for _, obj := range searchResult.Objects {
+		// Decode path
+		decodedPath, encryptorErr := request.Encryptor.DecryptPath(request.Location.BucketName.String(), []byte(obj.ObjectKey))
+		if encryptorErr != nil {
+			continue
+		}
+
 		// Parse metadata
 		metadata, err = parseJSON(obj.ClearMetadata)
 		if err != nil {
@@ -256,7 +278,7 @@ func (s *Server) searchMetadata(ctx context.Context, request *SearchRequest) (re
 		}
 
 		response.Results = append(response.Results, SearchResult{
-			Path:     fmt.Sprintf("sj://%s/%s", obj.BucketName, obj.ObjectKey),
+			Path:     fmt.Sprintf("sj://%s/%s", obj.BucketName, decodedPath),
 			Metadata: projectedMetadata,
 		})
 	}
@@ -307,7 +329,7 @@ func (s *Server) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = s.Repo.UpdateMetadata(ctx, request.Location, metadata)
+	err = s.Repo.UpdateMetadata(ctx, request.EncryptedLocation, metadata)
 	if err != nil {
 		s.errorResponse(w, err)
 		return
@@ -327,7 +349,7 @@ func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = s.Repo.DeleteMetadata(ctx, request.Location)
+	err = s.Repo.DeleteMetadata(ctx, request.EncryptedLocation)
 	if err != nil {
 		s.errorResponse(w, err)
 		return

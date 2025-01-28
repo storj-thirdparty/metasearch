@@ -17,7 +17,7 @@ import (
 
 // Auth authenticates HTTP requests for metasearch
 type Auth interface {
-	Authenticate(ctx context.Context, r *http.Request) (projectID uuid.UUID, err error)
+	Authenticate(ctx context.Context, r *http.Request) (projectID uuid.UUID, encryptor PathEncryptor, err error)
 }
 
 // HeaderAuth authenticates metasearch HTTP requests based on the Authorization header
@@ -31,7 +31,7 @@ func NewHeaderAuth(db satellite.DB) *HeaderAuth {
 	}
 }
 
-func (a *HeaderAuth) Authenticate(ctx context.Context, r *http.Request) (projectID uuid.UUID, err error) {
+func (a *HeaderAuth) Authenticate(ctx context.Context, r *http.Request) (projectID uuid.UUID, encryptor PathEncryptor, err error) {
 	// Parse authorization header
 	hdr := r.Header.Get("Authorization")
 	if hdr == "" {
@@ -60,10 +60,18 @@ func (a *HeaderAuth) Authenticate(ctx context.Context, r *http.Request) (project
 	project, err := config.OpenProject(ctx, access)
 	if err != nil {
 		err = fmt.Errorf("%w: cannot open project: %v", ErrAuthorizationFailed, err)
+		return
 	}
 	defer project.Close()
 
-	return a.getProjectID(ctx, access)
+	projectID, err = a.getProjectID(ctx, access)
+	if err != nil {
+		return
+	}
+
+	encryptor = NewUplinkPathEncryptor(access)
+
+	return
 }
 
 // GetPublicID gets the public project ID for the given access grant.
