@@ -14,8 +14,8 @@ import (
 
 // PathEncryptor provides a simple interface to encrypt and decrypt paths
 type PathEncryptor interface {
-	EncryptPath(bucket string, path string) ([]byte, error)
-	DecryptPath(bucket string, path []byte) (string, error)
+	EncryptPath(bucket string, path string) (string, error)
+	DecryptPath(bucket string, path string) (string, error)
 }
 
 // UplinkPathEncryptor encrypts/decrypts paths using the uplink library.
@@ -31,20 +31,20 @@ func NewUplinkPathEncryptor(access *uplink.Access) *UplinkPathEncryptor {
 	}
 }
 
-func (e *UplinkPathEncryptor) EncryptPath(bucket string, path string) ([]byte, error) {
+func (e *UplinkPathEncryptor) EncryptPath(bucket string, path string) (string, error) {
 	p := paths.NewUnencrypted(path)
 	encPath, err := encryption.EncryptPath(bucket, p, e.store.GetDefaultPathCipher(), e.store)
 	if err != nil {
-		return nil, fmt.Errorf("%w: cannot encrypt path: %s", ErrInternalError, path)
+		return "", fmt.Errorf("%w: cannot encrypt path: %s", ErrInternalError, path)
 	}
 	fmt.Printf("%s => %v\n", path, hex.EncodeToString([]byte(encPath.Raw())))
-	return []byte(encPath.Raw()), nil
+	return encPath.Raw(), nil
 }
 
-func (e *UplinkPathEncryptor) DecryptPath(bucket string, path []byte) (string, error) {
-	p, err := encryption.DecryptPath(bucket, paths.NewEncrypted(string(path)), e.store.GetDefaultPathCipher(), e.store)
+func (e *UplinkPathEncryptor) DecryptPath(bucket string, path string) (string, error) {
+	p, err := encryption.DecryptPath(bucket, paths.NewEncrypted(path), e.store.GetDefaultPathCipher(), e.store)
 	if err != nil {
 		return "", fmt.Errorf("%w: cannot decrypt path", ErrInternalError)
 	}
-	return string(p.String()), err
+	return p.String(), err
 }

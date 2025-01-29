@@ -94,11 +94,11 @@ func (a *mockAuth) Authenticate(ctx context.Context, r *http.Request) (uuid.UUID
 
 type mockEncryptor struct{}
 
-func (e *mockEncryptor) EncryptPath(_ string, p string) ([]byte, error) {
-	return []byte("enc:" + p), nil
+func (e *mockEncryptor) EncryptPath(_ string, p string) (string, error) {
+	return "enc:" + p, nil
 }
 
-func (e *mockEncryptor) DecryptPath(_ string, p []byte) (string, error) {
+func (e *mockEncryptor) DecryptPath(_ string, p string) (string, error) {
 	s := string(p)
 	if strings.HasPrefix(s, "enc:") {
 		return s[4:], nil

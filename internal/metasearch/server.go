@@ -210,10 +210,9 @@ func (s *Server) validateSearchRequest(ctx context.Context, r *http.Request, req
 	}
 
 	// Override key by KeyPrefix parameter
-	var encPrefix []byte
 	keyPrefix := normalizeKeyPrefix(request.KeyPrefix)
 	if keyPrefix != "" {
-		encPrefix, err = request.Encryptor.EncryptPath(request.Location.BucketName.String(), keyPrefix)
+		encPrefix, err := request.Encryptor.EncryptPath(request.Location.BucketName.String(), keyPrefix)
 		if err != nil {
 			return err
 		}
@@ -254,7 +253,7 @@ func (s *Server) searchMetadata(ctx context.Context, request *SearchRequest) (re
 	response.Results = make([]SearchResult, 0)
 	for _, obj := range searchResult.Objects {
 		// Decode path
-		decodedPath, encryptorErr := request.Encryptor.DecryptPath(request.Location.BucketName.String(), []byte(obj.ObjectKey))
+		decodedPath, encryptorErr := request.Encryptor.DecryptPath(request.Location.BucketName.String(), string(obj.ObjectKey))
 		if encryptorErr != nil {
 			continue
 		}
