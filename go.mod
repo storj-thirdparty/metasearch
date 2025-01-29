@@ -15,6 +15,7 @@ require (
 	go.uber.org/zap v1.27.0
 	storj.io/common v0.0.0-20241217150018-eb3fb91616f6
 	storj.io/storj v1.121.2
+	storj.io/uplink v1.13.2-0.20241209213014-e5f3beed1a59
 )
 
 require (
@@ -163,5 +164,4 @@ require (
 	storj.io/infectious v0.0.2 // indirect
 	storj.io/monkit-jaeger v0.0.0-20240221095020-52b0792fa6cd // indirect
 	storj.io/picobuf v0.0.3 // indirect
-	storj.io/uplink v1.13.2-0.20241209213014-e5f3beed1a59 // indirect
 )

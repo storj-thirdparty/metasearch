@@ -50,7 +50,7 @@ type FindObjectsByClearMetadataResult struct {
 
 type FindObjectsByClearMetadataResultObject struct {
 	metabase.ObjectStream
-	ClearMetadata string
+	ClearMetadata *string
 }
 
 // NewMetabaseSearchRepository creates a new MetabaseSearchRepository.
@@ -82,10 +82,7 @@ func (r *MetabaseSearchRepository) GetMetadata(ctx context.Context, loc metabase
 		return nil, fmt.Errorf("%w: %v", ErrInternalError, err)
 	}
 
-	if clearMetadata != nil {
-		return parseJSON(*clearMetadata)
-	}
-	return nil, nil
+	return parseJSON(clearMetadata)
 }
 
 func (r *MetabaseSearchRepository) UpdateMetadata(ctx context.Context, loc metabase.ObjectLocation, meta map[string]interface{}) (err error) {
@@ -210,7 +207,6 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metaba
 	}
 
 	query += fmt.Sprintf("\nORDER BY project_id, bucket_name, object_key, version LIMIT $%d", len(args)+1)
-	// fmt.Println(query)
 	args = append(args, batchSize)
 
 	// Execute query
@@ -231,8 +227,8 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metaba
 		return FindObjectsByClearMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
 	}
 
-	var last FindObjectsByClearMetadataResultObject
 	for rows.Next() {
+		var last FindObjectsByClearMetadataResultObject
 		err = rows.Scan(
 			&last.ProjectID, &last.BucketName, &last.ObjectKey, &last.Version, &last.StreamID, &last.ClearMetadata)
 		if err != nil {

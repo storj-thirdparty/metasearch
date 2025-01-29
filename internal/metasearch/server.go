@@ -210,8 +210,15 @@ func (s *Server) validateSearchRequest(ctx context.Context, r *http.Request, req
 	}
 
 	// Override key by KeyPrefix parameter
-	if request.KeyPrefix != "" {
-		request.Location.ObjectKey = metabase.ObjectKey(request.KeyPrefix)
+	var encPrefix []byte
+	keyPrefix := normalizeKeyPrefix(request.KeyPrefix)
+	if keyPrefix != "" {
+		encPrefix, err = request.Encryptor.EncryptPath(request.Location.BucketName.String(), keyPrefix)
+		if err != nil {
+			return err
+		}
+		request.Location.ObjectKey = metabase.ObjectKey(keyPrefix + "/")
+		request.EncryptedLocation.ObjectKey = metabase.ObjectKey(string(encPrefix) + "/")
 	}
 
 	// Validate filter
@@ -234,7 +241,7 @@ func (s *Server) validateSearchRequest(ctx context.Context, r *http.Request, req
 }
 
 func (s *Server) searchMetadata(ctx context.Context, request *SearchRequest) (response SearchResponse, err error) {
-	searchResult, err := s.Repo.QueryMetadata(ctx, request.Location, request.Match, request.startAfter, request.BatchSize)
+	searchResult, err := s.Repo.QueryMetadata(ctx, request.EncryptedLocation, request.Match, request.startAfter, request.BatchSize)
 	if err != nil {
 		return
 	}

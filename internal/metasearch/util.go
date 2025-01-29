@@ -2,15 +2,29 @@ package metasearch
 
 import (
 	"encoding/json"
+	"strings"
 )
 
-func parseJSON(data string) (map[string]interface{}, error) {
+func parseJSON(data *string) (map[string]interface{}, error) {
+	if data == nil || *data == "" {
+		return nil, nil
+	}
 	var meta map[string]interface{}
-	err := json.Unmarshal([]byte(data), &meta)
+	err := json.Unmarshal([]byte(*data), &meta)
 	if err != nil {
 		return nil, err
 	}
 	return meta, nil
+}
+
+func normalizeKeyPrefix(prefix string) string {
+	for strings.HasPrefix(prefix, "/") {
+		prefix = prefix[1:]
+	}
+	for strings.HasSuffix(prefix, "/") {
+		prefix = prefix[:len(prefix)-1]
+	}
+	return prefix
 }
 
 func splitToJSONLeaves(j string) ([]string, error) {

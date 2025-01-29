@@ -7,8 +7,32 @@ import (
 )
 
 func TestParseJSON(t *testing.T) {
-	_, err := parseJSON(`foo`)
+	o, err := parseJSON(nil)
+	require.NoError(t, err)
+	require.Len(t, o, 0)
+
+	s := ""
+	o, err = parseJSON(&s)
+	require.NoError(t, err)
+	require.Len(t, o, 0)
+
+	s = "foo"
+	o, err = parseJSON(&s)
 	require.Error(t, err)
+	require.Len(t, o, 0)
+
+	s = `{"foo": "bar"}`
+	o, err = parseJSON(&s)
+	require.NoError(t, err)
+	require.Len(t, o, 1)
+	require.Equal(t, "bar", o["foo"])
+}
+
+func TestNormalizePrefix(t *testing.T) {
+	require.Equal(t, "", normalizeKeyPrefix(""))
+	require.Equal(t, "", normalizeKeyPrefix("/"))
+	require.Equal(t, "foo", normalizeKeyPrefix("/foo//"))
+	require.Equal(t, "foo/bar", normalizeKeyPrefix("/foo/bar//"))
 }
 
 func TestSplitToJSONLeaves(t *testing.T) {

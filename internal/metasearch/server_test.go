@@ -66,6 +66,7 @@ func (r *mockRepo) QueryMetadata(ctx context.Context, loc metabase.ObjectLocatio
 		}
 
 		buf, _ := json.Marshal(v)
+		meta := string(buf)
 		objloc, _ := ulloc.Parse(k)
 		bucket, key, _ := objloc.RemoteParts()
 		results.Objects = append(results.Objects, FindObjectsByClearMetadataResultObject{
@@ -76,7 +77,7 @@ func (r *mockRepo) QueryMetadata(ctx context.Context, loc metabase.ObjectLocatio
 				Version:    metabase.Version(0),
 				StreamID:   uuid.UUID{},
 			},
-			ClearMetadata: string(buf),
+			ClearMetadata: &meta,
 		})
 
 	}
@@ -212,7 +213,7 @@ func TestMetaSearchQuery(t *testing.T) {
 	}`)
 	assert.Equal(t, rr.Code, http.StatusNoContent)
 
-	rr = handleRequest(server, http.MethodPut, "/metadata/testbucket/bar.txt", `{
+	rr = handleRequest(server, http.MethodPut, "/metadata/testbucket/subdir/bar.txt", `{
 		"foo": "456",
 		"n": 2
 	}`)
@@ -228,14 +229,14 @@ func TestMetaSearchQuery(t *testing.T) {
 
 	// Query with key prefix
 	rr = handleRequest(server, http.MethodPost, "/metasearch/testbucket", `{
-		"keyPrefix": "foo"
+		"keyPrefix": "subdir"
 	}`)
 	assertResponse(t, rr, http.StatusOK, `{
 		"results": [{
-			"path": "sj://testbucket/foo.txt",
+			"path": "sj://testbucket/subdir/bar.txt",
 			"metadata": {
 				"foo": "456",
-				"n": 1
+				"n": 2
 			}
 		}]
 	}`)
@@ -260,7 +261,7 @@ func TestMetaSearchQuery(t *testing.T) {
 	}`)
 	assertResponse(t, rr, http.StatusOK, `{
 		"results": [{
-			"path": "sj://testbucket/bar.txt",
+			"path": "sj://testbucket/subdir/bar.txt",
 			"metadata": {
 				"foo": "456",
 				"n": 2
@@ -278,7 +279,7 @@ func TestMetaSearchQuery(t *testing.T) {
 	}`)
 	assertResponse(t, rr, http.StatusOK, `{
 		"results": [{
-			"path": "sj://testbucket/bar.txt",
+			"path": "sj://testbucket/subdir/bar.txt",
 			"metadata": 2
 		}]
 	}`)
