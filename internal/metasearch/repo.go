@@ -25,21 +25,32 @@ const (
 
 // MetaSearchRepo performs operations on object metadata.
 type MetaSearchRepo interface {
+	// Get metadata for an object.
 	GetMetadata(ctx context.Context, loc metabase.ObjectLocation) (meta map[string]interface{}, err error)
+
+	// Query metadata in a bucket, optionally in a subdirectory.
+	// To search in a subdirectory, pass it in loc.ObjectKey, with a trailing /.
 	QueryMetadata(ctx context.Context, loc metabase.ObjectLocation, containsQuery map[string]interface{}, startAfter metabase.ObjectStream, batchSize int) (QueryMetadataResult, error)
+
+	// Set metadata for an object.
 	UpdateMetadata(ctx context.Context, loc metabase.ObjectLocation, meta map[string]interface{}) (err error)
+
+	// Delete metadata for an object.
 	DeleteMetadata(ctx context.Context, loc metabase.ObjectLocation) (err error)
 }
 
+// MetabaseSearchRepository implements MetaSearchRepo using the metabase database.
 type MetabaseSearchRepository struct {
 	db  tagsql.DB
 	log *zap.Logger
 }
 
+// QueryMetadataResult is the response of the QueryMetadata operation.
 type QueryMetadataResult struct {
 	Objects []QueryMetadataResultObject
 }
 
+// QueryMetadataResultObject is an item in QueryMetadataResult.
 type QueryMetadataResultObject struct {
 	metabase.ObjectStream
 	ClearMetadata *string
