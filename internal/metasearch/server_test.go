@@ -55,8 +55,8 @@ func (r *mockRepo) DeleteMetadata(ctx context.Context, loc metabase.ObjectLocati
 	return nil
 }
 
-func (r *mockRepo) QueryMetadata(ctx context.Context, loc metabase.ObjectLocation, containsQuery map[string]interface{}, startAfter metabase.ObjectStream, batchSize int) (FindObjectsByClearMetadataResult, error) {
-	results := FindObjectsByClearMetadataResult{}
+func (r *mockRepo) QueryMetadata(ctx context.Context, loc metabase.ObjectLocation, containsQuery map[string]interface{}, startAfter metabase.ObjectStream, batchSize int) (QueryMetadataResult, error) {
+	results := QueryMetadataResult{}
 	path := fmt.Sprintf("sj://%s/%s", loc.BucketName, loc.ObjectKey)
 
 	// return all objects whose path starts with the `loc`
@@ -69,7 +69,7 @@ func (r *mockRepo) QueryMetadata(ctx context.Context, loc metabase.ObjectLocatio
 		meta := string(buf)
 		objloc, _ := ulloc.Parse(k)
 		bucket, key, _ := objloc.RemoteParts()
-		results.Objects = append(results.Objects, FindObjectsByClearMetadataResultObject{
+		results.Objects = append(results.Objects, QueryMetadataResultObject{
 			ObjectStream: metabase.ObjectStream{
 				ProjectID:  loc.ProjectID,
 				BucketName: metabase.BucketName(bucket),

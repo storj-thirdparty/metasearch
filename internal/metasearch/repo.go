@@ -27,7 +27,7 @@ const (
 // MetaSearchRepo performs operations on object metadata.
 type MetaSearchRepo interface {
 	GetMetadata(ctx context.Context, loc metabase.ObjectLocation) (meta map[string]interface{}, err error)
-	QueryMetadata(ctx context.Context, loc metabase.ObjectLocation, containsQuery map[string]interface{}, startAfter metabase.ObjectStream, batchSize int) (FindObjectsByClearMetadataResult, error)
+	QueryMetadata(ctx context.Context, loc metabase.ObjectLocation, containsQuery map[string]interface{}, startAfter metabase.ObjectStream, batchSize int) (QueryMetadataResult, error)
 	UpdateMetadata(ctx context.Context, loc metabase.ObjectLocation, meta map[string]interface{}) (err error)
 	DeleteMetadata(ctx context.Context, loc metabase.ObjectLocation) (err error)
 }
@@ -44,11 +44,11 @@ type FindObjectsByClearMetadata struct {
 	ContainsQuery string
 }
 
-type FindObjectsByClearMetadataResult struct {
-	Objects []FindObjectsByClearMetadataResultObject
+type QueryMetadataResult struct {
+	Objects []QueryMetadataResultObject
 }
 
-type FindObjectsByClearMetadataResultObject struct {
+type QueryMetadataResultObject struct {
 	metabase.ObjectStream
 	ClearMetadata *string
 }
@@ -137,10 +137,10 @@ func (r *MetabaseSearchRepository) DeleteMetadata(ctx context.Context, loc metab
 	return r.UpdateMetadata(ctx, loc, nil)
 }
 
-func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metabase.ObjectLocation, containsQuery map[string]interface{}, startAfter metabase.ObjectStream, batchSize int) (FindObjectsByClearMetadataResult, error) {
+func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metabase.ObjectLocation, containsQuery map[string]interface{}, startAfter metabase.ObjectStream, batchSize int) (QueryMetadataResult, error) {
 	cq, err := json.Marshal(containsQuery)
 	if err != nil {
-		return FindObjectsByClearMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
+		return QueryMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
 	}
 
 	opts := FindObjectsByClearMetadata{
@@ -165,10 +165,10 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metaba
 	args := make([]interface{}, 0)
 	containsQueryParts, err := splitToJSONLeaves(opts.ContainsQuery)
 	if err != nil {
-		return FindObjectsByClearMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
+		return QueryMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
 	}
 	if len(containsQueryParts) > MaxFindObjectsByClearMetadataQuerySize {
-		return FindObjectsByClearMetadataResult{}, fmt.Errorf("%s: too many values in metadata query", ErrBadRequest)
+		return QueryMetadataResult{}, fmt.Errorf("%s: too many values in metadata query", ErrBadRequest)
 	}
 
 	if len(containsQueryParts) > 0 {
@@ -219,20 +219,21 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metaba
 		zap.String("StartAfterKey", string(startAfter.ObjectKey)),
 	)
 
-	var result FindObjectsByClearMetadataResult
-	result.Objects = make([]FindObjectsByClearMetadataResultObject, 0, batchSize)
+	var result QueryMetadataResult
+	result.Objects = make([]QueryMetadataResultObject, 0, batchSize)
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return FindObjectsByClearMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
+		return QueryMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
 	}
+	defer rows.Close()
 
 	for rows.Next() {
-		var last FindObjectsByClearMetadataResultObject
+		var last QueryMetadataResultObject
 		err = rows.Scan(
 			&last.ProjectID, &last.BucketName, &last.ObjectKey, &last.Version, &last.StreamID, &last.ClearMetadata)
 		if err != nil {
-			return FindObjectsByClearMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
+			return QueryMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
 		}
 
 		result.Objects = append(result.Objects, last)
