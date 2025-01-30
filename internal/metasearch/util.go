@@ -30,6 +30,51 @@ func normalizeKeyPrefix(prefix string) string {
 	return prefix
 }
 
+// toShallowMetadata converts deep JSON structures into a shallow, string-to-string map.
+// Example: {"foo":"1", "bar":[2]} is converted to {"foo":1, "json:bar":"[2]"}
+func toShallowMetadata(meta map[string]interface{}) (map[string]string, error) {
+	if len(meta) == 0 {
+		return nil, nil
+	}
+
+	result := make(map[string]string)
+	for k, v := range meta {
+		if s, ok := v.(string); ok {
+			result[k] = s
+		} else {
+			buf, err := json.Marshal(v)
+			if err != nil {
+				return nil, err
+			}
+			result["json:"+k] = string(buf)
+		}
+	}
+	return result, nil
+}
+
+// toDeepMetadata converts shallow, string-to-string metadata into a deep JSON object.
+// Example: {"foo":1, "json:bar":"[2]"} is converted to {"foo":"1", "bar":[2]}
+func toDeepMetadata(meta map[string]string) (map[string]interface{}, error) {
+	if len(meta) == 0 {
+		return nil, nil
+	}
+
+	result := make(map[string]interface{})
+	for k, v := range meta {
+		if strings.HasPrefix(k, "json:") {
+			var j interface{}
+			err := json.Unmarshal([]byte(v), &j)
+			if err != nil {
+				return nil, err
+			}
+			result[k[5:]] = j
+		} else {
+			result[k] = v
+		}
+	}
+	return result, nil
+}
+
 func splitToJSONLeaves(j string) ([]string, error) {
 	var obj interface{}
 	if err := json.Unmarshal([]byte(j), &obj); err != nil {

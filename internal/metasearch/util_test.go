@@ -4,6 +4,7 @@
 package metasearch
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -36,6 +37,28 @@ func TestNormalizePrefix(t *testing.T) {
 	require.Equal(t, "", normalizeKeyPrefix("/"))
 	require.Equal(t, "foo", normalizeKeyPrefix("/foo//"))
 	require.Equal(t, "foo/bar", normalizeKeyPrefix("/foo/bar//"))
+}
+
+func TestShallowDeepMetadata(t *testing.T) {
+	deepMeta := map[string]interface{}{
+		"stringValue": "foo",
+		"boolValue":   true,
+		"intValue":    1,
+		"arrayValue":  []interface{}{1, 2, 3},
+		"objValue": map[string]interface{}{
+			"foo": 1,
+		},
+	}
+
+	shallowMeta, err := toShallowMetadata(deepMeta)
+	require.NoError(t, err)
+
+	deepMeta2, err := toDeepMetadata(shallowMeta)
+	require.NoError(t, err)
+
+	jsonMeta1, _ := json.Marshal(deepMeta)
+	jsonMeta2, _ := json.Marshal(deepMeta2)
+	require.JSONEq(t, string(jsonMeta1), string(jsonMeta2))
 }
 
 func TestSplitToJSONLeaves(t *testing.T) {

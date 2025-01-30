@@ -88,7 +88,7 @@ func (r *mockRepo) QueryMetadata(ctx context.Context, loc metabase.ObjectLocatio
 
 type mockAuth struct{}
 
-func (a *mockAuth) Authenticate(ctx context.Context, r *http.Request) (uuid.UUID, PathEncryptor, error) {
+func (a *mockAuth) Authenticate(ctx context.Context, r *http.Request) (uuid.UUID, Encryptor, error) {
 	return uuid.UUID{}, &mockEncryptor{}, nil
 }
 
@@ -104,6 +104,17 @@ func (e *mockEncryptor) DecryptPath(_ string, p string) (string, error) {
 		return s[4:], nil
 	}
 	return "", fmt.Errorf("invalid encrypted path: %s", s)
+}
+
+func (e *mockEncryptor) EncryptMetadata(bucket string, path string, meta map[string]interface{}) (nonce []byte, encmeta []byte, key []byte, err error) {
+	json, err := json.Marshal(meta)
+	return nil, json, nil, err
+}
+
+func (e *mockEncryptor) DecryptMetadata(bucket string, path string, nonce []byte, encmeta []byte, key []byte) (map[string]interface{}, error) {
+	var meta map[string]interface{}
+	err := json.Unmarshal(encmeta, &meta)
+	return meta, err
 }
 
 // Utility functions

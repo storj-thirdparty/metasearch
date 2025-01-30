@@ -17,7 +17,7 @@ import (
 
 // Auth authenticates HTTP requests for metasearch
 type Auth interface {
-	Authenticate(ctx context.Context, r *http.Request) (projectID uuid.UUID, encryptor PathEncryptor, err error)
+	Authenticate(ctx context.Context, r *http.Request) (projectID uuid.UUID, encryptor Encryptor, err error)
 }
 
 // HeaderAuth authenticates metasearch HTTP requests based on the Authorization header
@@ -31,7 +31,7 @@ func NewHeaderAuth(db satellite.DB) *HeaderAuth {
 	}
 }
 
-func (a *HeaderAuth) Authenticate(ctx context.Context, r *http.Request) (projectID uuid.UUID, encryptor PathEncryptor, err error) {
+func (a *HeaderAuth) Authenticate(ctx context.Context, r *http.Request) (projectID uuid.UUID, encryptor Encryptor, err error) {
 	// Parse authorization header
 	hdr := r.Header.Get("Authorization")
 	if hdr == "" {
@@ -69,7 +69,7 @@ func (a *HeaderAuth) Authenticate(ctx context.Context, r *http.Request) (project
 		return
 	}
 
-	encryptor = NewUplinkPathEncryptor(access)
+	encryptor = NewUplinkEncryptor(access)
 
 	return
 }

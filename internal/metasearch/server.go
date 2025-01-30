@@ -35,7 +35,7 @@ type BaseRequest struct {
 	ProjectID uuid.UUID               `json:"-"`
 	Location  metabase.ObjectLocation `json:"-"`
 
-	Encryptor         PathEncryptor           `json:"-"`
+	Encryptor         Encryptor               `json:"-"`
 	EncryptedLocation metabase.ObjectLocation `json:"-"`
 }
 
