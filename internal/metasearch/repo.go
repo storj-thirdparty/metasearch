@@ -11,7 +11,6 @@ import (
 	"fmt"
 
 	"go.uber.org/zap"
-	"storj.io/common/uuid"
 
 	"storj.io/storj/satellite/metabase"
 	"storj.io/storj/shared/tagsql"
@@ -35,13 +34,6 @@ type MetaSearchRepo interface {
 type MetabaseSearchRepository struct {
 	db  tagsql.DB
 	log *zap.Logger
-}
-
-type FindObjectsByClearMetadata struct {
-	ProjectID     uuid.UUID
-	BucketName    metabase.BucketName
-	KeyPrefix     string
-	ContainsQuery string
 }
 
 type QueryMetadataResult struct {
@@ -142,13 +134,7 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metaba
 	if err != nil {
 		return QueryMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
 	}
-
-	opts := FindObjectsByClearMetadata{
-		ProjectID:     loc.ProjectID,
-		BucketName:    loc.BucketName,
-		KeyPrefix:     string(loc.ObjectKey),
-		ContainsQuery: string(cq),
-	}
+	jsonContainsQuery := string(cq)
 
 	// Create query
 	query := `
@@ -163,7 +149,7 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metaba
 	// multiple JSONB values, and would often scan the full table instead of
 	// using the GIN index.
 	args := make([]interface{}, 0)
-	containsQueryParts, err := splitToJSONLeaves(opts.ContainsQuery)
+	containsQueryParts, err := splitToJSONLeaves(jsonContainsQuery)
 	if err != nil {
 		return QueryMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
 	}
@@ -187,23 +173,23 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metaba
 	}
 
 	query += fmt.Sprintf("project_id = $%d AND bucket_name = $%d AND status <> $%d AND (expires_at IS NULL OR expires_at > now())", len(args)+1, len(args)+2, len(args)+3)
-	args = append(args, opts.ProjectID, opts.BucketName, statusPending)
+	args = append(args, loc.ProjectID, loc.BucketName, statusPending)
 
 	// Determine first and last object conditions
 	if startAfter.ProjectID.IsZero() {
 		// first page => use key prefix
 		query += fmt.Sprintf("\nAND (project_id, bucket_name, object_key, version) >= ($%d, $%d, $%d, $%d)", len(args)+1, len(args)+2, len(args)+3, len(args)+4)
-		args = append(args, opts.ProjectID, opts.BucketName, metabase.ObjectKey(opts.KeyPrefix), 0)
+		args = append(args, loc.ProjectID, loc.BucketName, loc.ObjectKey, 0)
 	} else {
 		// subsequent pages => use startAfter
 		query += fmt.Sprintf("\nAND (project_id, bucket_name, object_key, version) > ($%d, $%d, $%d, $%d)", len(args)+1, len(args)+2, len(args)+3, len(args)+4)
-		args = append(args, opts.ProjectID, opts.BucketName, startAfter.ObjectKey, startAfter.Version)
+		args = append(args, loc.ProjectID, loc.BucketName, startAfter.ObjectKey, startAfter.Version)
 	}
 
-	if opts.KeyPrefix != "" {
-		prefixLimit := metabase.PrefixLimit(metabase.ObjectKey(opts.KeyPrefix))
+	if loc.ObjectKey != "" {
+		prefixLimit := metabase.PrefixLimit(loc.ObjectKey)
 		query += fmt.Sprintf("\nAND (project_id, bucket_name, object_key, version) < ($%d, $%d, $%d, $%d)", len(args)+1, len(args)+2, len(args)+3, len(args)+4)
-		args = append(args, opts.ProjectID, opts.BucketName, prefixLimit, 0)
+		args = append(args, loc.ProjectID, loc.BucketName, prefixLimit, 0)
 	}
 
 	query += fmt.Sprintf("\nORDER BY project_id, bucket_name, object_key, version LIMIT $%d", len(args)+1)
@@ -211,10 +197,10 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metaba
 
 	// Execute query
 	r.log.Debug("Querying objects by clear metadata",
-		zap.Stringer("Project", opts.ProjectID),
-		zap.Stringer("Bucket", opts.BucketName),
-		zap.String("KeyPrefix", string(opts.KeyPrefix)),
-		zap.String("ContainsQuery", opts.ContainsQuery),
+		zap.Stringer("Project", loc.ProjectID),
+		zap.Stringer("Bucket", loc.BucketName),
+		zap.String("KeyPrefix", string(loc.ObjectKey)),
+		zap.String("ContainsQuery", jsonContainsQuery),
 		zap.Int("BatchSize", batchSize),
 		zap.String("StartAfterKey", string(startAfter.ObjectKey)),
 	)
