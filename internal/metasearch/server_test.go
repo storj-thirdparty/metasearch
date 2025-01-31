@@ -19,7 +19,6 @@ import (
 
 	"storj.io/common/uuid"
 	"storj.io/storj/cmd/uplink/ulloc"
-	"storj.io/storj/satellite/metabase"
 )
 
 // Mock repository
@@ -34,28 +33,28 @@ func newMockRepo() *mockRepo {
 	}
 }
 
-func (r *mockRepo) GetMetadata(ctx context.Context, loc metabase.ObjectLocation) (map[string]interface{}, error) {
+func (r *mockRepo) GetMetadata(ctx context.Context, loc ObjectLocation) (ObjectInfo, error) {
 	path := fmt.Sprintf("sj://%s/%s", loc.BucketName, loc.ObjectKey)
 	m, ok := r.metadata[path]
 	if !ok {
-		return nil, ErrNotFound
+		return ObjectInfo{}, ErrNotFound
 	}
-	return m, nil
+	return ObjectInfo{ClearMetadata: m}, nil
 }
 
-func (r *mockRepo) UpdateMetadata(ctx context.Context, loc metabase.ObjectLocation, meta map[string]interface{}) error {
+func (r *mockRepo) UpdateMetadata(ctx context.Context, loc ObjectLocation, meta map[string]interface{}) error {
 	path := fmt.Sprintf("sj://%s/%s", loc.BucketName, loc.ObjectKey)
 	r.metadata[path] = meta
 	return nil
 }
 
-func (r *mockRepo) DeleteMetadata(ctx context.Context, loc metabase.ObjectLocation) error {
+func (r *mockRepo) DeleteMetadata(ctx context.Context, loc ObjectLocation) error {
 	path := fmt.Sprintf("sj://%s/%s", loc.BucketName, loc.ObjectKey)
 	delete(r.metadata, path)
 	return nil
 }
 
-func (r *mockRepo) QueryMetadata(ctx context.Context, loc metabase.ObjectLocation, containsQuery map[string]interface{}, startAfter metabase.ObjectStream, batchSize int) (QueryMetadataResult, error) {
+func (r *mockRepo) QueryMetadata(ctx context.Context, loc ObjectLocation, containsQuery map[string]interface{}, startAfter ObjectLocation, batchSize int) (QueryMetadataResult, error) {
 	results := QueryMetadataResult{}
 	path := fmt.Sprintf("sj://%s/%s", loc.BucketName, loc.ObjectKey)
 
@@ -65,19 +64,16 @@ func (r *mockRepo) QueryMetadata(ctx context.Context, loc metabase.ObjectLocatio
 			continue
 		}
 
-		buf, _ := json.Marshal(v)
-		meta := string(buf)
 		objloc, _ := ulloc.Parse(k)
 		bucket, key, _ := objloc.RemoteParts()
-		results.Objects = append(results.Objects, QueryMetadataResultObject{
-			ObjectStream: metabase.ObjectStream{
+		results.Objects = append(results.Objects, ObjectInfo{
+			ObjectLocation: ObjectLocation{
 				ProjectID:  loc.ProjectID,
-				BucketName: metabase.BucketName(bucket),
-				ObjectKey:  metabase.ObjectKey(key),
-				Version:    metabase.Version(0),
-				StreamID:   uuid.UUID{},
+				BucketName: bucket,
+				ObjectKey:  key,
+				Version:    0,
 			},
-			ClearMetadata: &meta,
+			ClearMetadata: v,
 		})
 
 	}
@@ -163,12 +159,11 @@ func assertResponse(t *testing.T, rr *httptest.ResponseRecorder, code int, body 
 
 func TestPageToken(t *testing.T) {
 	projectID, _ := uuid.FromString(testProjectID)
-	startAfter := metabase.ObjectStream{
+	startAfter := ObjectLocation{
 		ProjectID:  projectID,
 		BucketName: "testbucket",
 		ObjectKey:  "foo.txt",
 		Version:    1,
-		StreamID:   uuid.UUID{},
 	}
 	generatedToken := getPageToken(startAfter)
 	parsedToken, err := parsePageToken(generatedToken)

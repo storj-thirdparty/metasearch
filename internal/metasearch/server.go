@@ -18,7 +18,6 @@ import (
 	"go.uber.org/zap"
 
 	"storj.io/common/uuid"
-	"storj.io/storj/satellite/metabase"
 )
 
 // Server implements the REST API for metadata search.
@@ -32,11 +31,11 @@ type Server struct {
 
 // BaseRequest contains common fields for all requests.
 type BaseRequest struct {
-	ProjectID uuid.UUID               `json:"-"`
-	Location  metabase.ObjectLocation `json:"-"`
+	ProjectID uuid.UUID      `json:"-"`
+	Location  ObjectLocation `json:"-"`
 
-	Encryptor         Encryptor               `json:"-"`
-	EncryptedLocation metabase.ObjectLocation `json:"-"`
+	Encryptor         Encryptor      `json:"-"`
+	EncryptedLocation ObjectLocation `json:"-"`
 }
 
 const defaultBatchSize = 100
@@ -59,7 +58,7 @@ type SearchRequest struct {
 	BatchSize int    `json:"batchSize,omitempty"`
 	PageToken string `json:"pageToken,omitempty"`
 
-	startAfter     metabase.ObjectStream
+	startAfter     ObjectLocation
 	filterPath     *jmespath.JMESPath
 	projectionPath *jmespath.JMESPath
 }
@@ -124,10 +123,10 @@ func (s *Server) validateRequest(ctx context.Context, r *http.Request, baseReque
 	bucket := vars["bucket"]
 	key := vars["key"]
 	baseRequest.Encryptor = encryptor
-	baseRequest.Location = metabase.ObjectLocation{
+	baseRequest.Location = ObjectLocation{
 		ProjectID:  projectID,
-		BucketName: metabase.BucketName(bucket),
-		ObjectKey:  metabase.ObjectKey(key),
+		BucketName: bucket,
+		ObjectKey:  key,
 	}
 
 	// Encrypt location
@@ -136,10 +135,10 @@ func (s *Server) validateRequest(ctx context.Context, r *http.Request, baseReque
 		return fmt.Errorf("%w: cannot encrypt path: %s", ErrInternalError, key)
 	}
 
-	baseRequest.EncryptedLocation = metabase.ObjectLocation{
+	baseRequest.EncryptedLocation = ObjectLocation{
 		ProjectID:  projectID,
-		BucketName: metabase.BucketName(bucket),
-		ObjectKey:  metabase.ObjectKey(encKey),
+		BucketName: bucket,
+		ObjectKey:  encKey,
 	}
 
 	return nil
@@ -161,7 +160,7 @@ func (s *Server) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.jsonResponse(w, http.StatusOK, meta)
+	s.jsonResponse(w, http.StatusOK, meta.ClearMetadata)
 }
 
 // HandleQuery handles a metadata view or search request.
@@ -212,12 +211,12 @@ func (s *Server) validateSearchRequest(ctx context.Context, r *http.Request, req
 	// Override key by KeyPrefix parameter
 	keyPrefix := normalizeKeyPrefix(request.KeyPrefix)
 	if keyPrefix != "" {
-		encPrefix, err := request.Encryptor.EncryptPath(request.Location.BucketName.String(), keyPrefix)
+		encPrefix, err := request.Encryptor.EncryptPath(request.Location.BucketName, keyPrefix)
 		if err != nil {
 			return err
 		}
-		request.Location.ObjectKey = metabase.ObjectKey(keyPrefix + "/")
-		request.EncryptedLocation.ObjectKey = metabase.ObjectKey(string(encPrefix) + "/")
+		request.Location.ObjectKey = keyPrefix + "/"
+		request.EncryptedLocation.ObjectKey = string(encPrefix) + "/"
 	}
 
 	// Validate filter
@@ -253,18 +252,13 @@ func (s *Server) searchMetadata(ctx context.Context, request *SearchRequest) (re
 	response.Results = make([]SearchResult, 0)
 	for _, obj := range searchResult.Objects {
 		// Decode path
-		decodedPath, encryptorErr := request.Encryptor.DecryptPath(request.Location.BucketName.String(), string(obj.ObjectKey))
+		decodedPath, encryptorErr := request.Encryptor.DecryptPath(request.Location.BucketName, string(obj.ObjectKey))
 		if encryptorErr != nil {
 			continue
 		}
 
-		// Parse metadata
-		metadata, err = parseJSON(obj.ClearMetadata)
-		if err != nil {
-			return
-		}
-
 		// Apply filter
+		metadata = obj.ClearMetadata
 		shouldInclude, err = s.filterMetadata(request, metadata)
 		if err != nil {
 			return
@@ -292,7 +286,7 @@ func (s *Server) searchMetadata(ctx context.Context, request *SearchRequest) (re
 	// Determine page token
 	if len(searchResult.Objects) >= request.BatchSize {
 		last := searchResult.Objects[len(searchResult.Objects)-1]
-		response.PageToken = getPageToken(last.ObjectStream)
+		response.PageToken = getPageToken(last.ObjectLocation)
 	}
 
 	return
@@ -391,51 +385,51 @@ func (s *Server) errorResponse(w http.ResponseWriter, err error) {
 	w.Write([]byte(resp))
 }
 
-func getPageToken(obj metabase.ObjectStream) string {
+func getPageToken(obj ObjectLocation) string {
 	q := url.Values{}
 	q.Set("projectID", obj.ProjectID.String())
-	q.Set("bucketName", string(obj.BucketName))
-	q.Set("objectKey", string(obj.ObjectKey))
-	q.Set("version", strconv.FormatInt(int64(obj.Version), 10))
+	q.Set("bucketName", obj.BucketName)
+	q.Set("objectKey", obj.ObjectKey)
+	q.Set("version", strconv.FormatInt(obj.Version, 10))
 
 	return base64.StdEncoding.EncodeToString([]byte(q.Encode()))
 }
 
-func parsePageToken(s string) (metabase.ObjectStream, error) {
+func parsePageToken(s string) (ObjectLocation, error) {
 	b, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
-		return metabase.ObjectStream{}, fmt.Errorf("invalid page token: %w", ErrBadRequest)
+		return ObjectLocation{}, fmt.Errorf("invalid page token: %w", ErrBadRequest)
 	}
 
 	q, err := url.ParseQuery(string(b))
 	if err != nil {
-		return metabase.ObjectStream{}, fmt.Errorf("invalid params in page token: %w", ErrBadRequest)
+		return ObjectLocation{}, fmt.Errorf("invalid params in page token: %w", ErrBadRequest)
 	}
 
 	projectID, err := uuid.FromString(q.Get("projectID"))
 	if err != nil {
-		return metabase.ObjectStream{}, fmt.Errorf("invalid projectID in page token: %w", ErrBadRequest)
+		return ObjectLocation{}, fmt.Errorf("invalid projectID in page token: %w", ErrBadRequest)
 	}
 
-	bucketName := metabase.BucketName(q.Get("bucketName"))
+	bucketName := q.Get("bucketName")
 	if bucketName == "" {
-		return metabase.ObjectStream{}, fmt.Errorf("invalid bucketName in page token: %w", ErrBadRequest)
+		return ObjectLocation{}, fmt.Errorf("invalid bucketName in page token: %w", ErrBadRequest)
 	}
 
-	objectKey := metabase.ObjectKey(q.Get("objectKey"))
+	objectKey := q.Get("objectKey")
 	if objectKey == "" {
-		return metabase.ObjectStream{}, fmt.Errorf("invalid objectKey in page token: %w", ErrBadRequest)
+		return ObjectLocation{}, fmt.Errorf("invalid objectKey in page token: %w", ErrBadRequest)
 	}
 
 	version, err := strconv.ParseInt(q.Get("version"), 10, 64)
 	if err != nil {
-		return metabase.ObjectStream{}, fmt.Errorf("invalid version in page token: %w", ErrBadRequest)
+		return ObjectLocation{}, fmt.Errorf("invalid version in page token: %w", ErrBadRequest)
 	}
 
-	return metabase.ObjectStream{
+	return ObjectLocation{
 		ProjectID:  projectID,
 		BucketName: bucketName,
 		ObjectKey:  objectKey,
-		Version:    metabase.Version(version),
+		Version:    version,
 	}, nil
 }

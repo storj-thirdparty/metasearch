@@ -113,3 +113,18 @@ func splitToLeafValues(obj interface{}, add func(interface{})) []interface{} {
 	}
 	return nil
 }
+
+// prefixLimit returns the object key that can be used in where clause for querying objects matching a prefix.
+// NOTE: copied from metabase.iterator.
+func prefixLimit(a string) string {
+	if a == "" {
+		return ""
+	}
+	if a[len(a)-1] == 0xFF {
+		return a + "\x00"
+	}
+
+	key := []byte(a)
+	key[len(key)-1]++
+	return string(key)
+}

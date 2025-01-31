@@ -9,10 +9,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 
-	"storj.io/storj/satellite/metabase"
+	"storj.io/common/uuid"
 	"storj.io/storj/shared/tagsql"
 )
 
@@ -20,40 +21,60 @@ const (
 	statusPending     = "1"
 	statusesCommitted = "(3,4)"
 
+	deleteMarkerUnversioned = 5
+	deleteMarkerVersioned   = 6
+
 	MaxFindObjectsByClearMetadataQuerySize = 10
 )
 
 // MetaSearchRepo performs operations on object metadata.
 type MetaSearchRepo interface {
 	// Get metadata for an object.
-	GetMetadata(ctx context.Context, loc metabase.ObjectLocation) (meta map[string]interface{}, err error)
+	GetMetadata(ctx context.Context, loc ObjectLocation) (obj ObjectInfo, err error)
 
 	// Query metadata in a bucket, optionally in a subdirectory.
 	// To search in a subdirectory, pass it in loc.ObjectKey, with a trailing /.
-	QueryMetadata(ctx context.Context, loc metabase.ObjectLocation, containsQuery map[string]interface{}, startAfter metabase.ObjectStream, batchSize int) (QueryMetadataResult, error)
+	QueryMetadata(ctx context.Context, loc ObjectLocation, containsQuery map[string]interface{}, startAfter ObjectLocation, batchSize int) (QueryMetadataResult, error)
 
 	// Set metadata for an object.
-	UpdateMetadata(ctx context.Context, loc metabase.ObjectLocation, meta map[string]interface{}) (err error)
+	UpdateMetadata(ctx context.Context, loc ObjectLocation, meta map[string]interface{}) (err error)
 
 	// Delete metadata for an object.
-	DeleteMetadata(ctx context.Context, loc metabase.ObjectLocation) (err error)
+	DeleteMetadata(ctx context.Context, loc ObjectLocation) (err error)
+}
+
+// ObjectLocation specifies the location of an object.
+type ObjectLocation struct {
+	ProjectID  uuid.UUID
+	BucketName string
+	ObjectKey  string
+	Version    int64 // optional
+}
+
+// ObjectInfo contains a subset of object fields that are used by metasearch.
+type ObjectInfo struct {
+	ObjectLocation
+	Version int64
+	Status  byte
+
+	EncryptedMetadataNonce []byte
+	EncryptedMetadata      []byte
+	EncryptedMetadataKey   []byte
+
+	ClearMetadata map[string]interface{}
+
+	MetaSearchQueuedAt *time.Time
+}
+
+// QueryMetadataResult is the response of the QueryMetadata operation.
+type QueryMetadataResult struct {
+	Objects []ObjectInfo
 }
 
 // MetabaseSearchRepository implements MetaSearchRepo using the metabase database.
 type MetabaseSearchRepository struct {
 	db  tagsql.DB
 	log *zap.Logger
-}
-
-// QueryMetadataResult is the response of the QueryMetadata operation.
-type QueryMetadataResult struct {
-	Objects []QueryMetadataResultObject
-}
-
-// QueryMetadataResultObject is an item in QueryMetadataResult.
-type QueryMetadataResultObject struct {
-	metabase.ObjectStream
-	ClearMetadata *string
 }
 
 // NewMetabaseSearchRepository creates a new MetabaseSearchRepository.
@@ -64,12 +85,16 @@ func NewMetabaseSearchRepository(db tagsql.DB, log *zap.Logger) *MetabaseSearchR
 	}
 }
 
-func (r *MetabaseSearchRepository) GetMetadata(ctx context.Context, loc metabase.ObjectLocation) (meta map[string]interface{}, err error) {
+func (r *MetabaseSearchRepository) GetMetadata(ctx context.Context, loc ObjectLocation) (obj ObjectInfo, err error) {
 	var clearMetadata *string
-	var status metabase.ObjectStatus
+	var status byte
 
 	err = r.db.QueryRowContext(ctx, `
-		SELECT clear_metadata, status
+		SELECT
+			project_id, bucket_name, object_key, version, status,
+			encrypted_metadata_nonce, encrypted_metadata, encrypted_metadata_encrypted_key,
+			clear_metadata,
+			metasearch_queued_at
 		FROM objects
 		WHERE
 			(project_id, bucket_name, object_key) = ($1, $2, $3) AND
@@ -77,18 +102,28 @@ func (r *MetabaseSearchRepository) GetMetadata(ctx context.Context, loc metabase
 		ORDER BY version DESC
 		LIMIT 1`,
 		loc.ProjectID, loc.BucketName, loc.ObjectKey,
-	).Scan(&clearMetadata, &status)
+	).Scan(
+		&obj.ProjectID, &obj.BucketName, &obj.ObjectKey, &obj.Version, &obj.Status,
+		&obj.EncryptedMetadataNonce, &obj.EncryptedMetadata, &obj.EncryptedMetadataKey,
+		&clearMetadata,
+		&obj.MetaSearchQueuedAt,
+	)
 
-	if errors.Is(err, sql.ErrNoRows) || status.IsDeleteMarker() {
-		return nil, fmt.Errorf("%w: object not found", ErrNotFound)
+	if errors.Is(err, sql.ErrNoRows) || status == deleteMarkerUnversioned || status == deleteMarkerVersioned {
+		return ObjectInfo{}, fmt.Errorf("%w: object not found", ErrNotFound)
 	} else if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInternalError, err)
+		return ObjectInfo{}, fmt.Errorf("%w: %v", ErrInternalError, err)
 	}
 
-	return parseJSON(clearMetadata)
+	obj.ClearMetadata, err = parseJSON(clearMetadata)
+	if err != nil {
+		return ObjectInfo{}, fmt.Errorf("%w: %v", ErrInternalError, err)
+	}
+
+	return obj, nil
 }
 
-func (r *MetabaseSearchRepository) UpdateMetadata(ctx context.Context, loc metabase.ObjectLocation, meta map[string]interface{}) (err error) {
+func (r *MetabaseSearchRepository) UpdateMetadata(ctx context.Context, loc ObjectLocation, meta map[string]interface{}) (err error) {
 	// Parse JSON metadata
 	var newMetadata *string
 	if meta != nil {
@@ -136,11 +171,11 @@ func (r *MetabaseSearchRepository) UpdateMetadata(ctx context.Context, loc metab
 	return nil
 }
 
-func (r *MetabaseSearchRepository) DeleteMetadata(ctx context.Context, loc metabase.ObjectLocation) (err error) {
+func (r *MetabaseSearchRepository) DeleteMetadata(ctx context.Context, loc ObjectLocation) (err error) {
 	return r.UpdateMetadata(ctx, loc, nil)
 }
 
-func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metabase.ObjectLocation, containsQuery map[string]interface{}, startAfter metabase.ObjectStream, batchSize int) (QueryMetadataResult, error) {
+func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc ObjectLocation, containsQuery map[string]interface{}, startAfter ObjectLocation, batchSize int) (QueryMetadataResult, error) {
 	cq, err := json.Marshal(containsQuery)
 	if err != nil {
 		return QueryMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
@@ -150,7 +185,10 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metaba
 	// Create query
 	query := `
 		SELECT
-			project_id, bucket_name, object_key, version, stream_id, clear_metadata
+			project_id, bucket_name, object_key, version, status,
+			encrypted_metadata_nonce, encrypted_metadata, encrypted_metadata_encrypted_key,
+			clear_metadata,
+			metasearch_queued_at
 		FROM objects@objects_pkey
 		WHERE
 	`
@@ -198,7 +236,7 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metaba
 	}
 
 	if loc.ObjectKey != "" {
-		prefixLimit := metabase.PrefixLimit(loc.ObjectKey)
+		prefixLimit := prefixLimit(loc.ObjectKey)
 		query += fmt.Sprintf("\nAND (project_id, bucket_name, object_key, version) < ($%d, $%d, $%d, $%d)", len(args)+1, len(args)+2, len(args)+3, len(args)+4)
 		args = append(args, loc.ProjectID, loc.BucketName, prefixLimit, 0)
 	}
@@ -209,7 +247,7 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metaba
 	// Execute query
 	r.log.Debug("Querying objects by clear metadata",
 		zap.Stringer("Project", loc.ProjectID),
-		zap.Stringer("Bucket", loc.BucketName),
+		zap.String("Bucket", loc.BucketName),
 		zap.String("KeyPrefix", string(loc.ObjectKey)),
 		zap.String("ContainsQuery", jsonContainsQuery),
 		zap.Int("BatchSize", batchSize),
@@ -217,7 +255,7 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metaba
 	)
 
 	var result QueryMetadataResult
-	result.Objects = make([]QueryMetadataResultObject, 0, batchSize)
+	result.Objects = make([]ObjectInfo, 0, batchSize)
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -226,9 +264,19 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc metaba
 	defer rows.Close()
 
 	for rows.Next() {
-		var last QueryMetadataResultObject
+		var last ObjectInfo
+		var clearMetadata *string
 		err = rows.Scan(
-			&last.ProjectID, &last.BucketName, &last.ObjectKey, &last.Version, &last.StreamID, &last.ClearMetadata)
+			&last.ProjectID, &last.BucketName, &last.ObjectKey, &last.Version, &last.Status,
+			&last.EncryptedMetadataNonce, &last.EncryptedMetadata, &last.EncryptedMetadataKey,
+			&clearMetadata,
+			&last.MetaSearchQueuedAt,
+		)
+		if err != nil {
+			return QueryMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
+		}
+
+		last.ClearMetadata, err = parseJSON(clearMetadata)
 		if err != nil {
 			return QueryMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
 		}
