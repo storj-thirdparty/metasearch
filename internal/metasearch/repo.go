@@ -41,6 +41,9 @@ type MetaSearchRepo interface {
 
 	// Delete metadata for an object.
 	DeleteMetadata(ctx context.Context, loc ObjectLocation) (err error)
+
+	// MigrateMetadata updates encrypted metadata for an object and removes it from the migration queue.
+	MigrateMetadata(ctx context.Context, obj ObjectInfo) (err error)
 }
 
 // ObjectLocation specifies the location of an object.
@@ -55,7 +58,6 @@ type ObjectLocation struct {
 type ObjectInfo struct {
 	ObjectLocation
 
-	Version  int64
 	Status   byte
 	Metadata ObjectMetadata
 
@@ -129,7 +131,7 @@ func (r *MetabaseSearchRepository) GetMetadata(ctx context.Context, loc ObjectLo
 }
 
 func (r *MetabaseSearchRepository) UpdateMetadata(ctx context.Context, loc ObjectLocation, meta ObjectMetadata) (err error) {
-	// Parse JSON metadata
+	// Marshal JSON metadata
 	var clearMetadata *string
 	if meta.ClearMetadata != nil {
 		data, err := json.Marshal(meta.ClearMetadata)
@@ -140,6 +142,7 @@ func (r *MetabaseSearchRepository) UpdateMetadata(ctx context.Context, loc Objec
 		clearMetadata = &s
 	}
 
+	// Execute query
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE objects
 		SET
@@ -295,4 +298,48 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc Object
 	}
 
 	return result, nil
+}
+
+func (r *MetabaseSearchRepository) MigrateMetadata(ctx context.Context, obj ObjectInfo) (err error) {
+	// Marshal JSON metadata
+	var clearMetadata *string
+	if obj.Metadata.ClearMetadata != nil {
+		data, err := json.Marshal(obj.Metadata.ClearMetadata)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrBadRequest, err)
+		}
+		s := string(data)
+		clearMetadata = &s
+	}
+
+	// Execute query
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE objects
+		SET
+			encrypted_metadata_nonce=$6, encrypted_metadata=$7, encrypted_metadata_encrypted_key=$8,
+			clear_metadata = $9,
+			metasearch_queued_at=NULL
+		WHERE
+			(project_id, bucket_name, object_key, version) = ($1, $2, $3, $4) AND
+			metasearch_queued_at=$5
+		`,
+		obj.ProjectID, []byte(obj.BucketName), []byte(obj.ObjectKey), obj.Version, obj.MetaSearchQueuedAt,
+		obj.Metadata.EncryptedMetadataNonce, obj.Metadata.EncryptedMetadata, obj.Metadata.EncryptedMetadataKey,
+		clearMetadata,
+	)
+
+	if err != nil {
+		return fmt.Errorf("%w: unable update to object metadata: %v", ErrInternalError, err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%w: unable to get rows affected: %v", ErrInternalError, err)
+	}
+
+	if affected == 0 {
+		return fmt.Errorf("%w: object not found or has been already migrated", ErrNotFound)
+	}
+
+	return nil
 }

@@ -12,47 +12,49 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/zeebo/assert"
 	"go.uber.org/zap"
 
 	"storj.io/common/uuid"
-	"storj.io/storj/cmd/uplink/ulloc"
 )
 
 // Mock repository
 
 type mockRepo struct {
-	metadata map[string]ObjectMetadata
+	objects map[string]ObjectInfo
 }
 
 func newMockRepo() *mockRepo {
 	return &mockRepo{
-		metadata: make(map[string]ObjectMetadata),
+		objects: make(map[string]ObjectInfo),
 	}
 }
 
 func (r *mockRepo) GetMetadata(ctx context.Context, loc ObjectLocation) (ObjectInfo, error) {
 	path := fmt.Sprintf("sj://%s/%s", loc.BucketName, loc.ObjectKey)
-	m, ok := r.metadata[path]
+	obj, ok := r.objects[path]
 	if !ok {
 		return ObjectInfo{}, ErrNotFound
 	}
-	return ObjectInfo{
-		Metadata: m,
-	}, nil
+
+	return obj, nil
 }
 
 func (r *mockRepo) UpdateMetadata(ctx context.Context, loc ObjectLocation, meta ObjectMetadata) error {
 	path := fmt.Sprintf("sj://%s/%s", loc.BucketName, loc.ObjectKey)
-	r.metadata[path] = meta
+	r.objects[path] = ObjectInfo{
+		ObjectLocation: loc,
+		Metadata:       meta,
+	}
 	return nil
 }
 
 func (r *mockRepo) DeleteMetadata(ctx context.Context, loc ObjectLocation) error {
 	path := fmt.Sprintf("sj://%s/%s", loc.BucketName, loc.ObjectKey)
-	delete(r.metadata, path)
+	delete(r.objects, path)
 	return nil
 }
 
@@ -61,24 +63,48 @@ func (r *mockRepo) QueryMetadata(ctx context.Context, loc ObjectLocation, contai
 	path := fmt.Sprintf("sj://%s/%s", loc.BucketName, loc.ObjectKey)
 
 	// return all objects whose path starts with the `loc`
-	for k, m := range r.metadata {
+	for k, obj := range r.objects {
 		if !strings.HasPrefix(k, path) {
 			continue
 		}
 
-		objloc, _ := ulloc.Parse(k)
-		bucket, key, _ := objloc.RemoteParts()
-		results.Objects = append(results.Objects, ObjectInfo{
-			ObjectLocation: ObjectLocation{
-				ProjectID:  loc.ProjectID,
-				BucketName: bucket,
-				ObjectKey:  key,
-			},
-			Metadata: m,
-		})
+		results.Objects = append(results.Objects, obj)
 
 	}
 	return results, nil
+}
+
+func (r *mockRepo) MigrateMetadata(ctx context.Context, obj ObjectInfo) (err error) {
+	path := fmt.Sprintf("sj://%s/%s", obj.BucketName, obj.ObjectKey)
+
+	existing, ok := r.objects[path]
+	if !ok || existing.MetaSearchQueuedAt == nil {
+		return ErrNotFound
+	}
+
+	obj.MetaSearchQueuedAt = nil
+	r.objects[path] = obj
+	return nil
+}
+
+func (r *mockRepo) updateFromUplink(bucket string, key string, encryptedMetadata string) error {
+	path := fmt.Sprintf("sj://%s/enc:%s", bucket, key)
+
+	obj, ok := r.objects[path]
+	if !ok {
+		return ErrNotFound
+	}
+
+	obj.Metadata.EncryptedMetadata = []byte(encryptedMetadata)
+	now := time.Now()
+	obj.MetaSearchQueuedAt = &now
+	r.objects[path] = obj
+	return nil
+}
+
+func (r *mockRepo) queuedForMigration(bucket string, key string) bool {
+	path := fmt.Sprintf("sj://%s/enc:%s", bucket, key)
+	return r.objects[path].MetaSearchQueuedAt != nil
 }
 
 // Mock authentication
@@ -104,7 +130,7 @@ func (e *mockEncryptor) DecryptPath(_ string, p string) (string, error) {
 }
 
 func (e *mockEncryptor) EncryptMetadata(bucket string, path string, meta *ObjectMetadata) error {
-	buf, err := json.Marshal(meta)
+	buf, err := json.Marshal(meta.ClearMetadata)
 	meta.EncryptedMetadataNonce = []byte("nonce")
 	meta.EncryptedMetadata = buf
 	meta.EncryptedMetadataKey = []byte("key")
@@ -293,4 +319,23 @@ func TestMetaSearchQuery(t *testing.T) {
 			"metadata": 2
 		}]
 	}`)
+}
+
+func TestMigrationOnGet(t *testing.T) {
+	server := testServer()
+	repo := server.Repo.(*mockRepo)
+
+	// Insert metadata via HTTP
+	rr := handleRequest(server, http.MethodPut, "/metadata/testbucket/foo.txt", `{"foo": 1}`)
+	assert.Equal(t, rr.Code, http.StatusNoContent)
+
+	// Update metadata from uplink
+	err := repo.updateFromUplink("testbucket", "foo.txt", `{"foo":2}`)
+	assert.NoError(t, err)
+	assert.True(t, repo.queuedForMigration("testbucket", "foo.txt"))
+
+	// Get metadata => metadata from uplink is returned, object is migrated
+	rr = handleRequest(server, http.MethodGet, "/metadata/testbucket/foo.txt", "")
+	assertResponse(t, rr, http.StatusOK, `{"foo": 2}`)
+	assert.False(t, repo.queuedForMigration("testbucket", "foo.txt"))
 }

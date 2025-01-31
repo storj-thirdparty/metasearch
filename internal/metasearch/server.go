@@ -154,13 +154,16 @@ func (s *Server) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta, err := s.Repo.GetMetadata(ctx, request.EncryptedLocation)
+	obj, err := s.Repo.GetMetadata(ctx, request.EncryptedLocation)
 	if err != nil {
 		s.errorResponse(w, err)
 		return
 	}
 
-	s.jsonResponse(w, http.StatusOK, meta.Metadata.ClearMetadata)
+	if obj.MetaSearchQueuedAt != nil {
+		s.migrateMetadata(ctx, request.Encryptor, request.Location, &obj)
+	}
+	s.jsonResponse(w, http.StatusOK, obj.Metadata.ClearMetadata)
 }
 
 // HandleQuery handles a metadata view or search request.
@@ -290,6 +293,32 @@ func (s *Server) searchMetadata(ctx context.Context, request *SearchRequest) (re
 	}
 
 	return
+}
+
+func (s *Server) migrateMetadata(ctx context.Context, encryptor Encryptor, loc ObjectLocation, obj *ObjectInfo) {
+	meta := obj.Metadata
+	err := encryptor.DecryptMetadata(loc.BucketName, loc.ObjectKey, &meta)
+	if err != nil {
+		s.Logger.Warn("cannot encrypt metadata",
+			zap.Stringer("Project", loc.ProjectID),
+			zap.String("Bucket", loc.BucketName),
+			zap.String("ObjectKey", loc.ObjectKey),
+			zap.Error(err),
+		)
+		return
+	}
+	obj.Metadata = meta
+
+	err = s.Repo.MigrateMetadata(ctx, *obj)
+	if err != nil {
+		s.Logger.Warn("cannot migrate metadata",
+			zap.Stringer("Project", loc.ProjectID),
+			zap.String("Bucket", loc.BucketName),
+			zap.String("ObjectKey", loc.ObjectKey),
+			zap.Error(err),
+		)
+		return
+	}
 }
 
 func (s *Server) filterMetadata(request *SearchRequest, metadata map[string]interface{}) (bool, error) {
