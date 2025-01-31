@@ -26,11 +26,11 @@ type Encryptor interface {
 
 	// EncryptMetadata encrypts the user metadata of an object.
 	// The path parameter must be unencrypted.
-	EncryptMetadata(bucket string, path string, meta map[string]interface{}) (nonce []byte, encmeta []byte, key []byte, err error)
+	EncryptMetadata(bucket string, path string, meta *ObjectMetadata) error
 
 	// DecryptMetadata decrypts the user metadata of an object.
 	// The path parameter must be unencrypted.
-	DecryptMetadata(bucket string, path string, nonce []byte, encmeta []byte, key []byte) (map[string]interface{}, error)
+	DecryptMetadata(bucket string, path string, meta *ObjectMetadata) error
 }
 
 // NOTE: this hardcoded value comes from uplink.OpenProject(). It may be moved
@@ -71,80 +71,81 @@ func (e *UplinkEncryptor) DecryptPath(bucket string, path string) (string, error
 	return p.String(), err
 }
 
-func (e *UplinkEncryptor) EncryptMetadata(bucket string, path string, meta map[string]interface{}) (nonce []byte, encmeta []byte, key []byte, err error) {
+func (e *UplinkEncryptor) EncryptMetadata(bucket string, path string, meta *ObjectMetadata) error {
 	// Create streamInfo structure
-	shallowMeta, err := toShallowMetadata(meta)
+	shallowMeta, err := toShallowMetadata(meta.ClearMetadata)
 	if err != nil {
-		return nil, nil, nil, err
+		return err
 	}
 
 	metadataBytes, err := pb.Marshal(&pb.SerializableMeta{
 		UserDefined: shallowMeta,
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return err
 	}
 
 	streamInfo, err := pb.Marshal(&pb.StreamInfo{
 		Metadata: metadataBytes,
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return err
 	}
 
 	// Encrypt streamInfo
 	derivedKey, err := encryption.DeriveContentKey(bucket, paths.NewUnencrypted(path), e.store)
 	if err != nil {
-		return nil, nil, nil, err
+		return err
 	}
 
 	var metadataKey storj.Key
 	// generate random key for encrypting the segment's content
 	_, err = rand.Read(metadataKey[:])
 	if err != nil {
-		return nil, nil, nil, err
+		return err
 	}
 
-	var encryptedKeyNonce storj.Nonce
 	// generate random nonce for encrypting the metadata key
+	var encryptedKeyNonce storj.Nonce
 	_, err = rand.Read(encryptedKeyNonce[:])
 	if err != nil {
-		return nil, nil, nil, err
+		return err
 	}
+	meta.EncryptedMetadataNonce = encryptedKeyNonce[:]
 
 	encryptedKey, err := encryption.EncryptKey(&metadataKey, defaultEncryptionParameters.CipherSuite, derivedKey, &encryptedKeyNonce)
 	if err != nil {
-		return nil, nil, nil, err
+		return err
 	}
-	key = []byte(encryptedKey)
+	meta.EncryptedMetadataKey = []byte(encryptedKey)
 
 	encryptedStreamInfo, err := encryption.Encrypt(streamInfo, defaultEncryptionParameters.CipherSuite, &metadataKey, &storj.Nonce{})
 	if err != nil {
-		return nil, nil, nil, err
+		return err
 	}
 
 	streamMetaBytes, err := pb.Marshal(&pb.StreamMeta{
 		EncryptedStreamInfo: encryptedStreamInfo,
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return err
 	}
-	encmeta = streamMetaBytes
+	meta.EncryptedMetadata = streamMetaBytes
 
-	return encryptedKeyNonce[:], streamMetaBytes, []byte(encryptedKey), nil
+	return nil
 }
 
-func (e *UplinkEncryptor) DecryptMetadata(bucket string, path string, nonce []byte, encmeta []byte, key []byte) (map[string]interface{}, error) {
+func (e *UplinkEncryptor) DecryptMetadata(bucket string, path string, meta *ObjectMetadata) error {
 	streamMeta := pb.StreamMeta{}
-	err := pb.Unmarshal(encmeta, &streamMeta)
+	err := pb.Unmarshal(meta.EncryptedMetadata, &streamMeta)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// Decrypt encryptedMetadata payload into pb.StreamInfo
 	derivedKey, err := encryption.DeriveContentKey(bucket, paths.NewUnencrypted(path), e.store)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	cipher := storj.CipherSuite(streamMeta.EncryptionType)
@@ -152,33 +153,40 @@ func (e *UplinkEncryptor) DecryptMetadata(bucket string, path string, nonce []by
 		cipher = defaultEncryptionParameters.CipherSuite
 	}
 
-	enckey := storj.EncryptedPrivateKey(key)
-	sjnonce := storj.Nonce(nonce)
+	enckey := storj.EncryptedPrivateKey(meta.EncryptedMetadataKey)
+	sjnonce := storj.Nonce(meta.EncryptedMetadataNonce)
 	contentKey, err := encryption.DecryptKey(enckey, cipher, derivedKey, &sjnonce)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	streamInfo, err := encryption.Decrypt(streamMeta.EncryptedStreamInfo, cipher, contentKey, &storj.Nonce{})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	var stream pb.StreamInfo
 	if err := pb.Unmarshal(streamInfo, &stream); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Deserialize metadata
 	serializableMeta := pb.SerializableMeta{}
 	err = pb.Unmarshal(stream.Metadata, &serializableMeta)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if serializableMeta.UserDefined == nil {
-		return nil, nil
+		meta.ClearMetadata = nil
+		return nil
 	}
 
-	return toDeepMetadata(serializableMeta.UserDefined)
+	clearMetadata, err := toDeepMetadata(serializableMeta.UserDefined)
+	if err != nil {
+		return err
+	}
+
+	meta.ClearMetadata = clearMetadata
+	return nil
 }

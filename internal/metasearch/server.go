@@ -160,7 +160,7 @@ func (s *Server) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.jsonResponse(w, http.StatusOK, meta.ClearMetadata)
+	s.jsonResponse(w, http.StatusOK, meta.Metadata.ClearMetadata)
 }
 
 // HandleQuery handles a metadata view or search request.
@@ -258,7 +258,7 @@ func (s *Server) searchMetadata(ctx context.Context, request *SearchRequest) (re
 		}
 
 		// Apply filter
-		metadata = obj.ClearMetadata
+		metadata = obj.Metadata.ClearMetadata
 		shouldInclude, err = s.filterMetadata(request, metadata)
 		if err != nil {
 			return

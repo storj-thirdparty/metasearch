@@ -54,16 +54,21 @@ type ObjectLocation struct {
 // ObjectInfo contains a subset of object fields that are used by metasearch.
 type ObjectInfo struct {
 	ObjectLocation
-	Version int64
-	Status  byte
 
+	Version  int64
+	Status   byte
+	Metadata ObjectMetadata
+
+	MetaSearchQueuedAt *time.Time
+}
+
+// ObjectMetadata stores both clear and encrypted metadata for an object.
+type ObjectMetadata struct {
 	EncryptedMetadataNonce []byte
 	EncryptedMetadata      []byte
 	EncryptedMetadataKey   []byte
 
 	ClearMetadata map[string]interface{}
-
-	MetaSearchQueuedAt *time.Time
 }
 
 // QueryMetadataResult is the response of the QueryMetadata operation.
@@ -104,7 +109,7 @@ func (r *MetabaseSearchRepository) GetMetadata(ctx context.Context, loc ObjectLo
 		loc.ProjectID, loc.BucketName, loc.ObjectKey,
 	).Scan(
 		&obj.ProjectID, &obj.BucketName, &obj.ObjectKey, &obj.Version, &obj.Status,
-		&obj.EncryptedMetadataNonce, &obj.EncryptedMetadata, &obj.EncryptedMetadataKey,
+		&obj.Metadata.EncryptedMetadataNonce, &obj.Metadata.EncryptedMetadata, &obj.Metadata.EncryptedMetadataKey,
 		&clearMetadata,
 		&obj.MetaSearchQueuedAt,
 	)
@@ -115,7 +120,7 @@ func (r *MetabaseSearchRepository) GetMetadata(ctx context.Context, loc ObjectLo
 		return ObjectInfo{}, fmt.Errorf("%w: %v", ErrInternalError, err)
 	}
 
-	obj.ClearMetadata, err = parseJSON(clearMetadata)
+	obj.Metadata.ClearMetadata, err = parseJSON(clearMetadata)
 	if err != nil {
 		return ObjectInfo{}, fmt.Errorf("%w: %v", ErrInternalError, err)
 	}
@@ -268,7 +273,7 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc Object
 		var clearMetadata *string
 		err = rows.Scan(
 			&last.ProjectID, &last.BucketName, &last.ObjectKey, &last.Version, &last.Status,
-			&last.EncryptedMetadataNonce, &last.EncryptedMetadata, &last.EncryptedMetadataKey,
+			&last.Metadata.EncryptedMetadataNonce, &last.Metadata.EncryptedMetadata, &last.Metadata.EncryptedMetadataKey,
 			&clearMetadata,
 			&last.MetaSearchQueuedAt,
 		)
@@ -276,7 +281,7 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc Object
 			return QueryMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
 		}
 
-		last.ClearMetadata, err = parseJSON(clearMetadata)
+		last.Metadata.ClearMetadata, err = parseJSON(clearMetadata)
 		if err != nil {
 			return QueryMetadataResult{}, fmt.Errorf("%w: %v", ErrInternalError, err)
 		}

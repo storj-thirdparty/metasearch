@@ -39,7 +39,11 @@ func (r *mockRepo) GetMetadata(ctx context.Context, loc ObjectLocation) (ObjectI
 	if !ok {
 		return ObjectInfo{}, ErrNotFound
 	}
-	return ObjectInfo{ClearMetadata: m}, nil
+	return ObjectInfo{
+		Metadata: ObjectMetadata{
+			ClearMetadata: m,
+		},
+	}, nil
 }
 
 func (r *mockRepo) UpdateMetadata(ctx context.Context, loc ObjectLocation, meta map[string]interface{}) error {
@@ -73,7 +77,9 @@ func (r *mockRepo) QueryMetadata(ctx context.Context, loc ObjectLocation, contai
 				ObjectKey:  key,
 				Version:    0,
 			},
-			ClearMetadata: v,
+			Metadata: ObjectMetadata{
+				ClearMetadata: v,
+			},
 		})
 
 	}
@@ -102,15 +108,17 @@ func (e *mockEncryptor) DecryptPath(_ string, p string) (string, error) {
 	return "", fmt.Errorf("invalid encrypted path: %s", s)
 }
 
-func (e *mockEncryptor) EncryptMetadata(bucket string, path string, meta map[string]interface{}) (nonce []byte, encmeta []byte, key []byte, err error) {
-	json, err := json.Marshal(meta)
-	return nil, json, nil, err
+func (e *mockEncryptor) EncryptMetadata(bucket string, path string, meta *ObjectMetadata) error {
+	buf, err := json.Marshal(meta)
+	meta.EncryptedMetadata = buf
+	return err
 }
 
-func (e *mockEncryptor) DecryptMetadata(bucket string, path string, nonce []byte, encmeta []byte, key []byte) (map[string]interface{}, error) {
-	var meta map[string]interface{}
-	err := json.Unmarshal(encmeta, &meta)
-	return meta, err
+func (e *mockEncryptor) DecryptMetadata(bucket string, path string, meta *ObjectMetadata) error {
+	var obj map[string]interface{}
+	err := json.Unmarshal(meta.EncryptedMetadata, &obj)
+	meta.ClearMetadata = obj
+	return err
 }
 
 // Utility functions

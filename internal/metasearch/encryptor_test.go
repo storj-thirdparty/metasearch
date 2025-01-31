@@ -37,13 +37,18 @@ func TestMetadataEncryption(t *testing.T) {
 	encryptor := NewUplinkEncryptor(access)
 
 	clearMeta := map[string]interface{}{"foo": true}
+	meta := ObjectMetadata{
+		ClearMetadata: clearMeta,
+	}
 
-	nonce, encMeta, encKey, err := encryptor.EncryptMetadata(testBucket, testPath, clearMeta)
+	err = encryptor.EncryptMetadata(testBucket, testPath, &meta)
 	require.NoError(t, err)
 
-	clearMeta2, err := encryptor.DecryptMetadata(testBucket, testPath, nonce, encMeta, encKey)
+	meta.ClearMetadata = nil
+	err = encryptor.DecryptMetadata(testBucket, testPath, &meta)
 	require.NoError(t, err)
 
+	clearMeta2 := meta.ClearMetadata
 	require.Len(t, clearMeta2, 1)
 	require.Equal(t, true, clearMeta2["foo"])
 }
