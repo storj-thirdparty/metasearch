@@ -5,7 +5,6 @@ package metasearch
 
 import (
 	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 
 	"storj.io/common/encryption"
@@ -59,7 +58,6 @@ func (e *UplinkEncryptor) EncryptPath(bucket string, path string) (string, error
 	if err != nil {
 		return "", fmt.Errorf("%w: cannot encrypt path: %s", ErrInternalError, path)
 	}
-	fmt.Printf("%s => %v\n", path, hex.EncodeToString([]byte(encPath.Raw())))
 	return encPath.Raw(), nil
 }
 

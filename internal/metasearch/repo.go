@@ -37,7 +37,7 @@ type MetaSearchRepo interface {
 	QueryMetadata(ctx context.Context, loc ObjectLocation, containsQuery map[string]interface{}, startAfter ObjectLocation, batchSize int) (QueryMetadataResult, error)
 
 	// Set metadata for an object.
-	UpdateMetadata(ctx context.Context, loc ObjectLocation, meta map[string]interface{}) (err error)
+	UpdateMetadata(ctx context.Context, loc ObjectLocation, meta ObjectMetadata) (err error)
 
 	// Delete metadata for an object.
 	DeleteMetadata(ctx context.Context, loc ObjectLocation) (err error)
@@ -106,7 +106,7 @@ func (r *MetabaseSearchRepository) GetMetadata(ctx context.Context, loc ObjectLo
 			status <> `+statusPending+`
 		ORDER BY version DESC
 		LIMIT 1`,
-		loc.ProjectID, loc.BucketName, loc.ObjectKey,
+		loc.ProjectID, []byte(loc.BucketName), []byte(loc.ObjectKey),
 	).Scan(
 		&obj.ProjectID, &obj.BucketName, &obj.ObjectKey, &obj.Version, &obj.Status,
 		&obj.Metadata.EncryptedMetadataNonce, &obj.Metadata.EncryptedMetadata, &obj.Metadata.EncryptedMetadataKey,
@@ -128,21 +128,24 @@ func (r *MetabaseSearchRepository) GetMetadata(ctx context.Context, loc ObjectLo
 	return obj, nil
 }
 
-func (r *MetabaseSearchRepository) UpdateMetadata(ctx context.Context, loc ObjectLocation, meta map[string]interface{}) (err error) {
+func (r *MetabaseSearchRepository) UpdateMetadata(ctx context.Context, loc ObjectLocation, meta ObjectMetadata) (err error) {
 	// Parse JSON metadata
-	var newMetadata *string
-	if meta != nil {
-		data, err := json.Marshal(meta)
+	var clearMetadata *string
+	if meta.ClearMetadata != nil {
+		data, err := json.Marshal(meta.ClearMetadata)
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrBadRequest, err)
 		}
 		s := string(data)
-		newMetadata = &s
+		clearMetadata = &s
 	}
 
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE objects
-		SET clear_metadata = $4
+		SET
+			encrypted_metadata_nonce=$4, encrypted_metadata=$5, encrypted_metadata_encrypted_key=$6,
+			clear_metadata = $7,
+			metasearch_queued_at=NULL
 		WHERE
 			(project_id, bucket_name, object_key) = ($1, $2, $3) AND
 			status IN `+statusesCommitted+` AND
@@ -157,7 +160,9 @@ func (r *MetabaseSearchRepository) UpdateMetadata(ctx context.Context, loc Objec
 				LIMIT 1
 			)
 		`,
-		loc.ProjectID, loc.BucketName, loc.ObjectKey, newMetadata,
+		loc.ProjectID, []byte(loc.BucketName), []byte(loc.ObjectKey),
+		meta.EncryptedMetadataNonce, meta.EncryptedMetadata, meta.EncryptedMetadataKey,
+		clearMetadata,
 	)
 
 	if err != nil {
@@ -177,7 +182,7 @@ func (r *MetabaseSearchRepository) UpdateMetadata(ctx context.Context, loc Objec
 }
 
 func (r *MetabaseSearchRepository) DeleteMetadata(ctx context.Context, loc ObjectLocation) (err error) {
-	return r.UpdateMetadata(ctx, loc, nil)
+	return r.UpdateMetadata(ctx, loc, ObjectMetadata{})
 }
 
 func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc ObjectLocation, containsQuery map[string]interface{}, startAfter ObjectLocation, batchSize int) (QueryMetadataResult, error) {
@@ -227,23 +232,23 @@ func (r *MetabaseSearchRepository) QueryMetadata(ctx context.Context, loc Object
 	}
 
 	query += fmt.Sprintf("project_id = $%d AND bucket_name = $%d AND status <> $%d AND (expires_at IS NULL OR expires_at > now())", len(args)+1, len(args)+2, len(args)+3)
-	args = append(args, loc.ProjectID, loc.BucketName, statusPending)
+	args = append(args, loc.ProjectID, []byte(loc.BucketName), statusPending)
 
 	// Determine first and last object conditions
 	if startAfter.ProjectID.IsZero() {
 		// first page => use key prefix
 		query += fmt.Sprintf("\nAND (project_id, bucket_name, object_key, version) >= ($%d, $%d, $%d, $%d)", len(args)+1, len(args)+2, len(args)+3, len(args)+4)
-		args = append(args, loc.ProjectID, loc.BucketName, loc.ObjectKey, 0)
+		args = append(args, loc.ProjectID, []byte(loc.BucketName), []byte(loc.ObjectKey), 0)
 	} else {
 		// subsequent pages => use startAfter
 		query += fmt.Sprintf("\nAND (project_id, bucket_name, object_key, version) > ($%d, $%d, $%d, $%d)", len(args)+1, len(args)+2, len(args)+3, len(args)+4)
-		args = append(args, loc.ProjectID, loc.BucketName, startAfter.ObjectKey, startAfter.Version)
+		args = append(args, loc.ProjectID, []byte(loc.BucketName), []byte(startAfter.ObjectKey), startAfter.Version)
 	}
 
 	if loc.ObjectKey != "" {
 		prefixLimit := prefixLimit(loc.ObjectKey)
 		query += fmt.Sprintf("\nAND (project_id, bucket_name, object_key, version) < ($%d, $%d, $%d, $%d)", len(args)+1, len(args)+2, len(args)+3, len(args)+4)
-		args = append(args, loc.ProjectID, loc.BucketName, prefixLimit, 0)
+		args = append(args, loc.ProjectID, []byte(loc.BucketName), []byte(prefixLimit), 0)
 	}
 
 	query += fmt.Sprintf("\nORDER BY project_id, bucket_name, object_key, version LIMIT $%d", len(args)+1)

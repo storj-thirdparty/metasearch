@@ -24,12 +24,12 @@ import (
 // Mock repository
 
 type mockRepo struct {
-	metadata map[string]map[string]interface{}
+	metadata map[string]ObjectMetadata
 }
 
 func newMockRepo() *mockRepo {
 	return &mockRepo{
-		metadata: make(map[string]map[string]interface{}),
+		metadata: make(map[string]ObjectMetadata),
 	}
 }
 
@@ -40,13 +40,11 @@ func (r *mockRepo) GetMetadata(ctx context.Context, loc ObjectLocation) (ObjectI
 		return ObjectInfo{}, ErrNotFound
 	}
 	return ObjectInfo{
-		Metadata: ObjectMetadata{
-			ClearMetadata: m,
-		},
+		Metadata: m,
 	}, nil
 }
 
-func (r *mockRepo) UpdateMetadata(ctx context.Context, loc ObjectLocation, meta map[string]interface{}) error {
+func (r *mockRepo) UpdateMetadata(ctx context.Context, loc ObjectLocation, meta ObjectMetadata) error {
 	path := fmt.Sprintf("sj://%s/%s", loc.BucketName, loc.ObjectKey)
 	r.metadata[path] = meta
 	return nil
@@ -63,7 +61,7 @@ func (r *mockRepo) QueryMetadata(ctx context.Context, loc ObjectLocation, contai
 	path := fmt.Sprintf("sj://%s/%s", loc.BucketName, loc.ObjectKey)
 
 	// return all objects whose path starts with the `loc`
-	for k, v := range r.metadata {
+	for k, m := range r.metadata {
 		if !strings.HasPrefix(k, path) {
 			continue
 		}
@@ -75,11 +73,8 @@ func (r *mockRepo) QueryMetadata(ctx context.Context, loc ObjectLocation, contai
 				ProjectID:  loc.ProjectID,
 				BucketName: bucket,
 				ObjectKey:  key,
-				Version:    0,
 			},
-			Metadata: ObjectMetadata{
-				ClearMetadata: v,
-			},
+			Metadata: m,
 		})
 
 	}
@@ -110,7 +105,9 @@ func (e *mockEncryptor) DecryptPath(_ string, p string) (string, error) {
 
 func (e *mockEncryptor) EncryptMetadata(bucket string, path string, meta *ObjectMetadata) error {
 	buf, err := json.Marshal(meta)
+	meta.EncryptedMetadataNonce = []byte("nonce")
 	meta.EncryptedMetadata = buf
+	meta.EncryptedMetadataKey = []byte("key")
 	return err
 }
 
@@ -171,7 +168,6 @@ func TestPageToken(t *testing.T) {
 		ProjectID:  projectID,
 		BucketName: "testbucket",
 		ObjectKey:  "foo.txt",
-		Version:    1,
 	}
 	generatedToken := getPageToken(startAfter)
 	parsedToken, err := parsePageToken(generatedToken)

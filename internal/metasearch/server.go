@@ -329,7 +329,17 @@ func (s *Server) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = s.Repo.UpdateMetadata(ctx, request.EncryptedLocation, metadata)
+	meta := ObjectMetadata{
+		ClearMetadata: metadata,
+	}
+
+	err = request.Encryptor.EncryptMetadata(request.Location.BucketName, request.Location.ObjectKey, &meta)
+	if err != nil {
+		s.errorResponse(w, fmt.Errorf("%w: cannot encrypt metadata", ErrBadRequest))
+		return
+	}
+
+	err = s.Repo.UpdateMetadata(ctx, request.EncryptedLocation, meta)
 	if err != nil {
 		s.errorResponse(w, err)
 		return
