@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Storj Labs, Inc.
+// Copyright (C) 2024 Storj Labs, Inc.
 // See LICENSE for copying information.
 
 package metasearch
@@ -27,6 +27,7 @@ type Server struct {
 	Auth     Auth
 	Endpoint string
 	Handler  http.Handler
+	Migrator *ObjectMigrator
 }
 
 // BaseRequest contains common fields for all requests.
@@ -82,6 +83,7 @@ func NewServer(log *zap.Logger, repo MetaSearchRepo, auth Auth, endpoint string)
 		Repo:     repo,
 		Auth:     auth,
 		Endpoint: endpoint,
+		Migrator: NewObjectMigrator(log, repo),
 	}
 
 	router := mux.NewRouter()
@@ -110,6 +112,8 @@ func (s *Server) validateRequest(ctx context.Context, r *http.Request, baseReque
 	if err != nil {
 		return err
 	}
+	s.Migrator.AddProject(ctx, projectID, encryptor)
+	_ = s.Migrator.MigrateProject(ctx, projectID)
 
 	// Decode request body
 	if body != nil && r.Body != nil {
@@ -161,7 +165,7 @@ func (s *Server) HandleGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if obj.MetaSearchQueuedAt != nil {
-		s.migrateMetadata(ctx, request.Encryptor, request.Location, &obj)
+		_ = s.Migrator.MigrateObject(ctx, &obj)
 	}
 	s.jsonResponse(w, http.StatusOK, obj.Metadata.ClearMetadata)
 }
@@ -293,32 +297,6 @@ func (s *Server) searchMetadata(ctx context.Context, request *SearchRequest) (re
 	}
 
 	return
-}
-
-func (s *Server) migrateMetadata(ctx context.Context, encryptor Encryptor, loc ObjectLocation, obj *ObjectInfo) {
-	meta := obj.Metadata
-	err := encryptor.DecryptMetadata(loc.BucketName, loc.ObjectKey, &meta)
-	if err != nil {
-		s.Logger.Warn("cannot encrypt metadata",
-			zap.Stringer("Project", loc.ProjectID),
-			zap.String("Bucket", loc.BucketName),
-			zap.String("ObjectKey", loc.ObjectKey),
-			zap.Error(err),
-		)
-		return
-	}
-	obj.Metadata = meta
-
-	err = s.Repo.MigrateMetadata(ctx, *obj)
-	if err != nil {
-		s.Logger.Warn("cannot migrate metadata",
-			zap.Stringer("Project", loc.ProjectID),
-			zap.String("Bucket", loc.BucketName),
-			zap.String("ObjectKey", loc.ObjectKey),
-			zap.Error(err),
-		)
-		return
-	}
 }
 
 func (s *Server) filterMetadata(request *SearchRequest, metadata map[string]interface{}) (bool, error) {

@@ -87,6 +87,15 @@ func (r *mockRepo) MigrateMetadata(ctx context.Context, obj ObjectInfo) (err err
 	return nil
 }
 
+func (r *mockRepo) GetObjectsForMigration(ctx context.Context, projectID uuid.UUID, migrate ObjectMigrationFunc) error {
+	for _, obj := range r.objects {
+		if obj.MetaSearchQueuedAt != nil && !migrate(ctx, obj) {
+			break
+		}
+	}
+	return nil
+}
+
 func (r *mockRepo) updateFromUplink(bucket string, key string, encryptedMetadata string) error {
 	path := fmt.Sprintf("sj://%s/enc:%s", bucket, key)
 
@@ -337,5 +346,31 @@ func TestMigrationOnGet(t *testing.T) {
 	// Get metadata => metadata from uplink is returned, object is migrated
 	rr = handleRequest(server, http.MethodGet, "/metadata/testbucket/foo.txt", "")
 	assertResponse(t, rr, http.StatusOK, `{"foo": 2}`)
+	assert.False(t, repo.queuedForMigration("testbucket", "foo.txt"))
+}
+
+func TestMigrationOnSearch(t *testing.T) {
+	server := testServer()
+	repo := server.Repo.(*mockRepo)
+
+	// Insert metadata via HTTP
+	rr := handleRequest(server, http.MethodPut, "/metadata/testbucket/foo.txt", `{"foo": 1}`)
+	assert.Equal(t, rr.Code, http.StatusNoContent)
+
+	// Update metadata from uplink
+	err := repo.updateFromUplink("testbucket", "foo.txt", `{"foo":2}`)
+	assert.NoError(t, err)
+	assert.True(t, repo.queuedForMigration("testbucket", "foo.txt"))
+
+	// Search metadata => metadata from uplink is returned, object is migrated
+	rr = handleRequest(server, http.MethodPost, "/metasearch/testbucket", `{"match":{"foo":"2"}}`)
+	assertResponse(t, rr, http.StatusOK, `{
+		"results": [{
+			"path": "sj://testbucket/foo.txt",
+			"metadata": {
+				"foo": 2
+			}
+		}]
+	}`)
 	assert.False(t, repo.queuedForMigration("testbucket", "foo.txt"))
 }

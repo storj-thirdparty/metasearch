@@ -44,6 +44,9 @@ type MetaSearchRepo interface {
 
 	// MigrateMetadata updates encrypted metadata for an object and removes it from the migration queue.
 	MigrateMetadata(ctx context.Context, obj ObjectInfo) (err error)
+
+	// GetObjectsForMigration fetches all objects to migrate and calls the callback function until it returns false.
+	GetObjectsForMigration(ctx context.Context, projectID uuid.UUID, migrate ObjectMigrationFunc) error
 }
 
 // ObjectLocation specifies the location of an object.
@@ -77,6 +80,9 @@ type ObjectMetadata struct {
 type QueryMetadataResult struct {
 	Objects []ObjectInfo
 }
+
+// ObjectMigrationFunc is called by GetObjectsForMigration. If the function returns false, the migration stops.
+type ObjectMigrationFunc func(ctx context.Context, obj ObjectInfo) bool
 
 // MetabaseSearchRepository implements MetaSearchRepo using the metabase database.
 type MetabaseSearchRepository struct {
@@ -341,5 +347,58 @@ func (r *MetabaseSearchRepository) MigrateMetadata(ctx context.Context, obj Obje
 		return fmt.Errorf("%w: object not found or has been already migrated", ErrNotFound)
 	}
 
+	return nil
+}
+
+func (r *MetabaseSearchRepository) GetObjectsForMigration(ctx context.Context, projectID uuid.UUID, migrate ObjectMigrationFunc) error {
+	// We go in reverse order: if there are objects that are impossible to
+	// migrate (potential data corruption), the  migrator will quickly migrate
+	// the ones that are likely to be correct.
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			project_id, bucket_name, object_key, version, status,
+			encrypted_metadata_nonce, encrypted_metadata, encrypted_metadata_encrypted_key,
+			clear_metadata,
+			metasearch_queued_at
+		FROM objects@objects_metasearch_queued_at_idx
+		WHERE
+			project_id=$1 AND
+			metasearch_queued_at IS NOT NULL
+		ORDER BY metasearch_queued_at DESC
+	`, projectID)
+
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInternalError, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var obj ObjectInfo
+		var clearMetadata *string
+		err = rows.Scan(
+			&obj.ProjectID, &obj.BucketName, &obj.ObjectKey, &obj.Version, &obj.Status,
+			&obj.Metadata.EncryptedMetadataNonce, &obj.Metadata.EncryptedMetadata, &obj.Metadata.EncryptedMetadataKey,
+			&clearMetadata,
+			&obj.MetaSearchQueuedAt,
+		)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrInternalError, err)
+		}
+
+		obj.Metadata.ClearMetadata, err = parseJSON(clearMetadata)
+		if err != nil {
+			// Log and ignore error: the migrator will only use the encrypted metadata
+			r.log.Warn("cannot decode clear metadata",
+				zap.Stringer("Project", obj.ProjectID),
+				zap.String("Bucket", obj.BucketName),
+				zap.String("ObjectKey", obj.ObjectKey),
+				zap.Error(err),
+			)
+		}
+
+		if !migrate(ctx, obj) {
+			break
+		}
+	}
 	return nil
 }
