@@ -25,4 +25,7 @@ var (
 
 	// ErrInternalError is returned when an internal error occurs.
 	ErrInternalError = &ErrorResponse{StatusCode: 500, Message: "internal error"}
+
+	// ErrServiceUnavailable is returned when the service is not ready to server requests.
+	ErrServiceUnavailable = &ErrorResponse{StatusCode: 503, Message: "service unavailable"}
 )

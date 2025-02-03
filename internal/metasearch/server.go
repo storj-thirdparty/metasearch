@@ -42,7 +42,7 @@ type BaseRequest struct {
 
 const defaultBatchSize = 100
 const maxBatchSize = 1000
-const migrationTimeout = 1 * time.Second
+const migrationTimeout = 10 * time.Second
 
 // GetRequest contains fields for a get request.
 type GetRequest struct {
@@ -116,7 +116,9 @@ func (s *Server) validateRequest(ctx context.Context, r *http.Request, baseReque
 		return err
 	}
 	s.Migrator.AddProject(ctx, projectID, encryptor)
-	s.Migrator.WaitForProject(ctx, projectID, migrationTimeout)
+	if !s.Migrator.WaitForProject(ctx, projectID, migrationTimeout) {
+		return fmt.Errorf("%w: metadata is being indexed", ErrServiceUnavailable)
+	}
 
 	// Decode request body
 	if body != nil && r.Body != nil {
