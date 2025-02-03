@@ -7,11 +7,14 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
 	"storj.io/common/uuid"
 )
+
+const migrationInterval = 1 * time.Second
 
 // ObjectMigrator manages encryptors and migrates the encrypted metadata to
 // clear metadata in the background.
@@ -20,6 +23,8 @@ type ObjectMigrator struct {
 	repo    MetaSearchRepo
 	workers map[uuid.UUID]*ObjectMigratorWorker
 	mutex   *sync.Mutex
+	running bool
+	done    chan bool
 }
 
 // NewObjectMigrator creates an ObjectMigrator instance.
@@ -29,6 +34,7 @@ func NewObjectMigrator(log *zap.Logger, repo MetaSearchRepo) *ObjectMigrator {
 		repo:    repo,
 		workers: make(map[uuid.UUID]*ObjectMigratorWorker),
 		mutex:   &sync.Mutex{},
+		done:    make(chan bool, 1),
 	}
 }
 
@@ -46,33 +52,53 @@ func (m *ObjectMigrator) AddProject(ctx context.Context, projectID uuid.UUID, en
 		repo:      m.repo,
 		projectID: projectID,
 		encryptor: encryptor,
+		mutex:     &sync.Mutex{},
 	}
 
 	m.workers[projectID] = &worker
 }
 
-func (m *ObjectMigrator) MigrateProject(ctx context.Context, projectID uuid.UUID) error {
+// Start object migrator in the background.
+func (m *ObjectMigrator) Start() {
+	m.running = true
+	go func() {
+		for m.running {
+			time.Sleep(migrationInterval)
+
+			m.mutex.Lock()
+			for _, worker := range m.workers {
+				worker.Start()
+			}
+			m.mutex.Unlock()
+		}
+		m.done <- true
+	}()
+}
+
+// Stop object migrator, wait until it finishes all pending migrations.
+func (m *ObjectMigrator) Stop() {
+	if !m.running {
+		return
+	}
+
+	m.running = false
+	<-m.done
+}
+
+// WaitForProject triggers the migraion of a project in the background, and
+// waits until it finishes with a timeout. It returns true if the migration has
+// completed before the timeout.
+func (m *ObjectMigrator) WaitForProject(ctx context.Context, projectID uuid.UUID, timeout time.Duration) bool {
 	m.mutex.Lock()
 	worker, ok := m.workers[projectID]
 	m.mutex.Unlock()
 
 	if !ok {
-		return fmt.Errorf("no migration worker for project '%s'", projectID)
+		m.log.Error("no migration worker for project", zap.Stringer("ProjectID", projectID))
+		return false
 	}
 
-	err := m.repo.GetObjectsForMigration(ctx, projectID, func(ctx context.Context, obj ObjectInfo) bool {
-		_ = worker.MigrateObject(ctx, &obj)
-		return true // TODO: timeout and/or error handling
-	})
-
-	if err != nil {
-		m.log.Warn("error migrating project",
-			zap.Stringer("ProjectID", projectID),
-			zap.Error(err),
-		)
-	}
-
-	return err
+	return worker.WaitForProject(ctx, timeout)
 }
 
 // MigrateObject migrates a single object using the stored encryptors.
@@ -94,6 +120,77 @@ type ObjectMigratorWorker struct {
 	repo      MetaSearchRepo
 	projectID uuid.UUID
 	encryptor Encryptor
+
+	mutex       *sync.Mutex
+	running     bool
+	subscribers []chan bool
+}
+
+// WaitForProject triggers the migraion of a project in the background, and
+// waits until it finishes with a timeout. It returns true if the migration has
+// completed before the timeout.
+func (w *ObjectMigratorWorker) WaitForProject(ctx context.Context, timeout time.Duration) bool {
+	// Start worker, subscribe to its finish event
+	w.mutex.Lock()
+	done := make(chan bool, 1)
+	w.subscribers = append(w.subscribers, done)
+	w.mutex.Unlock()
+
+	w.Start()
+
+	// Create timeout
+	timeoutCh := make(chan bool, 1)
+	go func() {
+		time.Sleep(timeout)
+		timeoutCh <- true
+	}()
+
+	// Wait for worker/timeout
+	select {
+	case <-timeoutCh:
+		return false
+	case <-done:
+		return true
+	}
+}
+
+// Start the migration worker. Must be called while w.mutex is locked.
+func (w *ObjectMigratorWorker) Start() {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	if w.running {
+		return
+	}
+	w.running = true
+
+	go func() {
+		w.MigrateProject(context.Background())
+
+		w.mutex.Lock()
+		for _, subscriber := range w.subscribers {
+			subscriber <- true
+		}
+		w.subscribers = nil
+		w.running = false
+		w.mutex.Unlock()
+	}()
+}
+
+func (w *ObjectMigratorWorker) MigrateProject(ctx context.Context) error {
+	err := w.repo.GetObjectsForMigration(ctx, w.projectID, func(ctx context.Context, obj ObjectInfo) bool {
+		_ = w.MigrateObject(ctx, &obj)
+		return true // TODO: timeout and/or error handling
+	})
+
+	if err != nil {
+		w.log.Warn("error migrating project",
+			zap.Stringer("ProjectID", w.projectID),
+			zap.Error(err),
+		)
+	}
+
+	return err
 }
 
 // MigrateObject migrates a single object in database.

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/jmespath/go-jmespath"
@@ -41,6 +42,7 @@ type BaseRequest struct {
 
 const defaultBatchSize = 100
 const maxBatchSize = 1000
+const migrationTimeout = 1 * time.Second
 
 // GetRequest contains fields for a get request.
 type GetRequest struct {
@@ -103,6 +105,7 @@ func NewServer(log *zap.Logger, repo MetaSearchRepo, auth Auth, endpoint string)
 
 // Run starts the metasearch server.
 func (s *Server) Run() error {
+	s.Migrator.Start()
 	return http.ListenAndServe(s.Endpoint, s.Handler)
 }
 
@@ -113,7 +116,7 @@ func (s *Server) validateRequest(ctx context.Context, r *http.Request, baseReque
 		return err
 	}
 	s.Migrator.AddProject(ctx, projectID, encryptor)
-	_ = s.Migrator.MigrateProject(ctx, projectID)
+	s.Migrator.WaitForProject(ctx, projectID, migrationTimeout)
 
 	// Decode request body
 	if body != nil && r.Body != nil {
