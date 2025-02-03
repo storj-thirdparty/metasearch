@@ -46,7 +46,7 @@ type MetaSearchRepo interface {
 	MigrateMetadata(ctx context.Context, obj ObjectInfo) (err error)
 
 	// GetObjectsForMigration fetches all objects to migrate and calls the callback function until it returns false.
-	GetObjectsForMigration(ctx context.Context, projectID uuid.UUID, migrate ObjectMigrationFunc) error
+	GetObjectsForMigration(ctx context.Context, projectID uuid.UUID, startTime *time.Time, migrate ObjectMigrationFunc) error
 }
 
 // ObjectLocation specifies the location of an object.
@@ -350,11 +350,8 @@ func (r *MetabaseSearchRepository) MigrateMetadata(ctx context.Context, obj Obje
 	return nil
 }
 
-func (r *MetabaseSearchRepository) GetObjectsForMigration(ctx context.Context, projectID uuid.UUID, migrate ObjectMigrationFunc) error {
-	// We go in reverse order: if there are objects that are impossible to
-	// migrate (potential data corruption), the  migrator will quickly migrate
-	// the ones that are likely to be correct.
-	rows, err := r.db.QueryContext(ctx, `
+func (r *MetabaseSearchRepository) GetObjectsForMigration(ctx context.Context, projectID uuid.UUID, startTime *time.Time, migrate ObjectMigrationFunc) error {
+	query := `
 		SELECT
 			project_id, bucket_name, object_key, version, status,
 			encrypted_metadata_nonce, encrypted_metadata, encrypted_metadata_encrypted_key,
@@ -364,8 +361,16 @@ func (r *MetabaseSearchRepository) GetObjectsForMigration(ctx context.Context, p
 		WHERE
 			project_id=$1 AND
 			metasearch_queued_at IS NOT NULL
-		ORDER BY metasearch_queued_at DESC
-	`, projectID)
+	`
+	args := []interface{}{projectID}
+
+	if startTime != nil {
+		query += " AND metasearch_queued_at >= $2 "
+		args = append(args, *startTime)
+	}
+
+	query += " ORDER BY metasearch_queued_at "
+	rows, err := r.db.QueryContext(ctx, query, args...)
 
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInternalError, err)

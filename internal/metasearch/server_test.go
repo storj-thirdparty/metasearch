@@ -87,7 +87,7 @@ func (r *mockRepo) MigrateMetadata(ctx context.Context, obj ObjectInfo) (err err
 	return nil
 }
 
-func (r *mockRepo) GetObjectsForMigration(ctx context.Context, projectID uuid.UUID, migrate ObjectMigrationFunc) error {
+func (r *mockRepo) GetObjectsForMigration(ctx context.Context, projectID uuid.UUID, startTime *time.Time, migrate ObjectMigrationFunc) error {
 	for _, obj := range r.objects {
 		if obj.MetaSearchQueuedAt != nil && !migrate(ctx, obj) {
 			break

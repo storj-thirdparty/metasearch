@@ -124,6 +124,7 @@ type ObjectMigratorWorker struct {
 	mutex       *sync.Mutex
 	running     bool
 	subscribers []chan bool
+	startTime   *time.Time
 }
 
 // WaitForProject triggers the migraion of a project in the background, and
@@ -178,9 +179,9 @@ func (w *ObjectMigratorWorker) Start() {
 }
 
 func (w *ObjectMigratorWorker) MigrateProject(ctx context.Context) error {
-	err := w.repo.GetObjectsForMigration(ctx, w.projectID, func(ctx context.Context, obj ObjectInfo) bool {
+	err := w.repo.GetObjectsForMigration(ctx, w.projectID, w.startTime, func(ctx context.Context, obj ObjectInfo) bool {
 		_ = w.MigrateObject(ctx, &obj)
-		return true // TODO: timeout and/or error handling
+		return true
 	})
 
 	if err != nil {
@@ -209,6 +210,7 @@ func (w *ObjectMigratorWorker) MigrateObject(ctx context.Context, obj *ObjectInf
 			zap.String("ObjectKey", obj.ObjectKey),
 			zap.Error(err),
 		)
+		w.updateStartTime(obj) // skip this object until we get a new encryptor
 		return err
 	}
 
@@ -222,6 +224,7 @@ func (w *ObjectMigratorWorker) MigrateObject(ctx context.Context, obj *ObjectInf
 			zap.String("ObjectKey", clearObjectKey),
 			zap.Error(err),
 		)
+		w.updateStartTime(obj) // skip this object until we get a new encryptor
 		return err
 	}
 	obj.Metadata = meta
@@ -243,5 +246,15 @@ func (w *ObjectMigratorWorker) MigrateObject(ctx context.Context, obj *ObjectInf
 		zap.String("Bucket", obj.BucketName),
 		zap.String("ObjectKey", clearObjectKey),
 	)
+
+	w.updateStartTime(obj)
 	return nil
+}
+
+func (w *ObjectMigratorWorker) updateStartTime(obj *ObjectInfo) {
+	w.mutex.Lock()
+	if w.startTime == nil || w.startTime.Before(*obj.MetaSearchQueuedAt) {
+		w.startTime = obj.MetaSearchQueuedAt
+	}
+	w.mutex.Unlock()
 }
