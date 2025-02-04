@@ -8,6 +8,9 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"slices"
+	"sync"
+	"sync/atomic"
 
 	"storj.io/common/encryption"
 	"storj.io/common/memory"
@@ -198,30 +201,46 @@ func (e *UplinkEncryptor) DecryptMetadata(bucket string, path string, meta *Obje
 // EncryptorRepository maintains a set of encryptors for a project, and tries
 // the find the best encryptor for an object.
 type EncryptorRepository struct {
-	encryptors []Encryptor
+	encryptors []EncryptorRepositoryEntry
+	mutex      *sync.Mutex
+}
+
+// EncryptorRepositoryEntry stores a single encryptor with its success rate.
+type EncryptorRepositoryEntry struct {
+	encryptor Encryptor
+	success   int64
+	total     int64
 }
 
 // NewEncryptorRepository creates an empty encryptor repository.
 func NewEncryptorRepository() *EncryptorRepository {
-	return &EncryptorRepository{}
+	return &EncryptorRepository{
+		mutex: &sync.Mutex{},
+	}
 }
 
 // AddEncryptor adds the encryptor to the repository, trying to keep a minimal
 // set of encryptors. Returns true if the encryptor has not been in the
 // repository yet.
 func (r *EncryptorRepository) AddEncryptor(encryptor Encryptor) bool {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	newEntry := EncryptorRepositoryEntry{
+		encryptor: encryptor,
+	}
 	newAccessEncryptor, ok := encryptor.(*UplinkEncryptor)
 	if !ok {
 		// This should only happen in unit cases. No need to optimize.
-		r.encryptors = append(r.encryptors, encryptor)
+		r.encryptors = append(r.encryptors, newEntry)
 		return true
 	}
 	newStore := newAccessEncryptor.store
 	newPathCipher := newStore.GetDefaultPathCipher()
 	newKey := newStore.GetDefaultKey()[:]
 
-	for _, oldEncryptor := range r.encryptors {
-		oldAccessEncryptor, ok := oldEncryptor.(*UplinkEncryptor)
+	for _, entry := range r.encryptors {
+		oldAccessEncryptor, ok := entry.encryptor.(*UplinkEncryptor)
 		if !ok {
 			continue
 		}
@@ -236,7 +255,7 @@ func (r *EncryptorRepository) AddEncryptor(encryptor Encryptor) bool {
 		}
 	}
 
-	r.encryptors = append(r.encryptors, encryptor)
+	r.encryptors = append(r.encryptors, newEntry)
 	return true
 }
 
@@ -244,25 +263,59 @@ func (r *EncryptorRepository) AddEncryptor(encryptor Encryptor) bool {
 // available encryptors. Returns the object key (decrypted on success,
 // encrypted on error) and an error if none of the encryptors succeeded.
 func (r *EncryptorRepository) DecryptMetadata(obj *ObjectInfo) (clearObjectKey string, meta ObjectMetadata, err error) {
-	var encryptor Encryptor
 	meta = obj.Metadata
 
-	for _, encryptor = range r.encryptors {
+	for i := range len(r.encryptors) {
+		e := &r.encryptors[i]
+		atomic.AddInt64(&e.total, 1)
+
 		// Try to decrypt path
-		clearObjectKey, err = encryptor.DecryptPath(obj.BucketName, obj.ObjectKey)
+		clearObjectKey, err = e.encryptor.DecryptPath(obj.BucketName, obj.ObjectKey)
 		if err != nil {
 			continue
 		}
 
 		// Try to decrypt metadata
-		err = encryptor.DecryptMetadata(obj.BucketName, clearObjectKey, &meta)
+		err = e.encryptor.DecryptMetadata(obj.BucketName, clearObjectKey, &meta)
 		if err != nil {
 			continue
 		}
 
 		// If both path and metadata can be encrypted, return with success
+		atomic.AddInt64(&e.success, 1)
 		return
 	}
 
 	return obj.ObjectKey, meta, errors.New("cannot find decryption key for object")
+}
+
+// CheckEncryptors removes unused encryptors if needed.
+func (r *EncryptorRepository) CheckEncryptors(maxEncryptors int) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	if len(r.encryptors) <= maxEncryptors {
+		return
+	}
+
+	slices.SortFunc(r.encryptors, func(e1 EncryptorRepositoryEntry, e2 EncryptorRepositoryEntry) int {
+		// We compare rational numbers (e1.success/e2.total) vs (e2.success/e2.total) by multiplying both by (e1.total*e2.total)
+		// The result is int64, so we need to make a switch case after that.
+		// The order is reversed to move the most successful encryptors to the top of the list.
+		cmp := e1.success*e2.total - e2.success*e1.total
+		switch {
+		case e1.total == 0 && e2.total > 0:
+			return 1
+		case e1.total > 0 && e2.total == 0:
+			return -1
+		case cmp < 0:
+			return 1
+		case cmp > 0:
+			return -1
+		default:
+			return 0
+		}
+	})
+
+	r.encryptors = r.encryptors[:maxEncryptors]
 }

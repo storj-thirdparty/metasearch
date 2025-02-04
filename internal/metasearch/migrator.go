@@ -15,6 +15,7 @@ import (
 )
 
 const migrationInterval = 1 * time.Second
+const maxEncryptorsPerProject = 100
 
 // ObjectMigrator manages encryptors and migrates the encrypted metadata to
 // clear metadata in the background.
@@ -232,6 +233,9 @@ func (w *ObjectMigratorWorker) MigrateObject(ctx context.Context, obj *ObjectInf
 		w.updateStartTime(obj) // skip this object until we get a new encryptor
 		return err
 	}
+
+	// Limit number of encryptors
+	w.encryptors.CheckEncryptors(maxEncryptorsPerProject)
 
 	// Migrate metadata
 	obj.Metadata = meta

@@ -90,4 +90,9 @@ func TestEncryptorRepository(t *testing.T) {
 	require.Equal(t, clearPath, "2/foo.txt")
 	metaJSON, _ := json.Marshal(meta.ClearMetadata)
 	require.JSONEq(t, `{"foo":"bar"}`, string(metaJSON))
+
+	// Remove unused encryptors => only the second one remains
+	r.CheckEncryptors(1)
+	require.Len(t, r.encryptors, 1)
+	require.Equal(t, "2/", r.encryptors[0].encryptor.(*mockEncryptor).restrictPrefix)
 }
