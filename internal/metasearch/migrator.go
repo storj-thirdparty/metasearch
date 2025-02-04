@@ -43,19 +43,14 @@ func (m *ObjectMigrator) AddProject(ctx context.Context, projectID uuid.UUID, en
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	if _, ok := m.workers[projectID]; ok {
+	if worker, ok := m.workers[projectID]; ok {
+		worker.AddEncryptor(encryptor)
 		return
 	}
 
-	worker := ObjectMigratorWorker{
-		log:       m.log,
-		repo:      m.repo,
-		projectID: projectID,
-		encryptor: encryptor,
-		mutex:     &sync.Mutex{},
-	}
-
-	m.workers[projectID] = &worker
+	worker := NewObjectMigratorWorker(m.log, m.repo, projectID)
+	worker.AddEncryptor(encryptor)
+	m.workers[projectID] = worker
 }
 
 // Start object migrator in the background.
@@ -119,12 +114,36 @@ type ObjectMigratorWorker struct {
 	log       *zap.Logger
 	repo      MetaSearchRepo
 	projectID uuid.UUID
-	encryptor Encryptor
 
 	mutex       *sync.Mutex
 	running     bool
+	encryptors  *EncryptorRepository
 	subscribers []chan bool
 	startTime   *time.Time
+}
+
+// NewObjectMigratorWorker creates a new object migrator worker.
+func NewObjectMigratorWorker(log *zap.Logger, repo MetaSearchRepo, projectID uuid.UUID) *ObjectMigratorWorker {
+	return &ObjectMigratorWorker{
+		log:        log,
+		repo:       repo,
+		projectID:  projectID,
+		mutex:      &sync.Mutex{},
+		encryptors: NewEncryptorRepository(),
+	}
+}
+
+// AddEncryptor adds an encryptor to the worker. If the encryptor has different
+// settings from all previous ones, reprocess failed items in the migration queue.
+func (w *ObjectMigratorWorker) AddEncryptor(encryptor Encryptor) {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	if w.encryptors.AddEncryptor(encryptor) {
+		// Restart the migration queue if a new encryptor is added, so that
+		// migrations that failed due to decryption errors can be retried.
+		w.startTime = nil
+	}
 }
 
 // WaitForProject triggers the migraion of a project in the background, and
@@ -201,10 +220,10 @@ func (w *ObjectMigratorWorker) MigrateObject(ctx context.Context, obj *ObjectInf
 		return fmt.Errorf("worker projectID mismatch: %s vs %s", w.projectID, obj.ProjectID)
 	}
 
-	// Decrypt path
-	clearObjectKey, err := w.encryptor.DecryptPath(obj.BucketName, obj.ObjectKey)
+	// Decrypt path and metadata
+	clearObjectKey, meta, err := w.encryptors.DecryptMetadata(obj)
 	if err != nil {
-		w.log.Warn("cannot decrypt object path",
+		w.log.Warn(err.Error(),
 			zap.Stringer("Project", obj.ProjectID),
 			zap.String("Bucket", obj.BucketName),
 			zap.String("ObjectKey", obj.ObjectKey),
@@ -214,22 +233,8 @@ func (w *ObjectMigratorWorker) MigrateObject(ctx context.Context, obj *ObjectInf
 		return err
 	}
 
-	// Decrypt metadata
-	meta := obj.Metadata
-	err = w.encryptor.DecryptMetadata(obj.BucketName, clearObjectKey, &meta)
-	if err != nil {
-		w.log.Warn("cannot decrypt metadata",
-			zap.Stringer("Project", obj.ProjectID),
-			zap.String("Bucket", obj.BucketName),
-			zap.String("ObjectKey", clearObjectKey),
-			zap.Error(err),
-		)
-		w.updateStartTime(obj) // skip this object until we get a new encryptor
-		return err
-	}
-	obj.Metadata = meta
-
 	// Migrate metadata
+	obj.Metadata = meta
 	err = w.repo.MigrateMetadata(ctx, *obj)
 	if err != nil {
 		w.log.Warn("cannot migrate metadata",

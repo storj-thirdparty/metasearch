@@ -4,10 +4,12 @@
 package metasearch
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"storj.io/common/uuid"
 	"storj.io/uplink"
 )
 
@@ -51,4 +53,41 @@ func TestMetadataEncryption(t *testing.T) {
 	clearMeta2 := meta.ClearMetadata
 	require.Len(t, clearMeta2, 1)
 	require.Equal(t, true, clearMeta2["foo"])
+}
+
+func TestEncryptorRepository(t *testing.T) {
+	e1 := &mockEncryptor{restrictPrefix: "1/"}
+	e2 := &mockEncryptor{restrictPrefix: "2/"}
+
+	r := NewEncryptorRepository()
+	require.True(t, r.AddEncryptor(e1))
+	require.True(t, r.AddEncryptor(e2))
+
+	// Encrypt with e2
+	projectID, _ := uuid.New()
+	obj := &ObjectInfo{
+		ObjectLocation: ObjectLocation{
+			ProjectID:  projectID,
+			BucketName: "mybucket",
+			ObjectKey:  "2/foo.txt",
+		},
+		Metadata: ObjectMetadata{
+			ClearMetadata: map[string]interface{}{"foo": "bar"},
+		},
+	}
+	encryptedPath, err := e2.EncryptPath(obj.BucketName, obj.ObjectKey)
+	require.NoError(t, err)
+	obj.ObjectKey = encryptedPath
+
+	err = e2.EncryptMetadata(obj.BucketName, obj.ObjectKey, &obj.Metadata)
+	require.NoError(t, err)
+	obj.Metadata.ClearMetadata = nil
+
+	// Decrypt metadata with repository
+	obj.Metadata.ClearMetadata = nil
+	clearPath, meta, err := r.DecryptMetadata(obj)
+
+	require.Equal(t, clearPath, "2/foo.txt")
+	metaJSON, _ := json.Marshal(meta.ClearMetadata)
+	require.JSONEq(t, `{"foo":"bar"}`, string(metaJSON))
 }

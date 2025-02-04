@@ -124,7 +124,9 @@ func (a *mockAuth) Authenticate(ctx context.Context, r *http.Request) (uuid.UUID
 	return uuid.UUID{}, &mockEncryptor{}, nil
 }
 
-type mockEncryptor struct{}
+type mockEncryptor struct {
+	restrictPrefix string
+}
 
 func (e *mockEncryptor) EncryptPath(_ string, p string) (string, error) {
 	return "enc:" + p, nil
@@ -132,7 +134,8 @@ func (e *mockEncryptor) EncryptPath(_ string, p string) (string, error) {
 
 func (e *mockEncryptor) DecryptPath(_ string, p string) (string, error) {
 	s := string(p)
-	if strings.HasPrefix(s, "enc:") {
+	prefix := "enc:" + e.restrictPrefix
+	if strings.HasPrefix(s, prefix) {
 		return s[4:], nil
 	}
 	return "", fmt.Errorf("invalid encrypted path: %s", s)

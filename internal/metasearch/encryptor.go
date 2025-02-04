@@ -4,7 +4,9 @@
 package metasearch
 
 import (
+	"bytes"
 	"crypto/rand"
+	"errors"
 	"fmt"
 
 	"storj.io/common/encryption"
@@ -134,6 +136,10 @@ func (e *UplinkEncryptor) EncryptMetadata(bucket string, path string, meta *Obje
 }
 
 func (e *UplinkEncryptor) DecryptMetadata(bucket string, path string, meta *ObjectMetadata) error {
+	if len(meta.EncryptedMetadataKey) == 0 || len(meta.EncryptedMetadataNonce) == 0 {
+		return nil
+	}
+
 	streamMeta := pb.StreamMeta{}
 	err := pb.Unmarshal(meta.EncryptedMetadata, &streamMeta)
 	if err != nil {
@@ -187,4 +193,76 @@ func (e *UplinkEncryptor) DecryptMetadata(bucket string, path string, meta *Obje
 
 	meta.ClearMetadata = clearMetadata
 	return nil
+}
+
+// EncryptorRepository maintains a set of encryptors for a project, and tries
+// the find the best encryptor for an object.
+type EncryptorRepository struct {
+	encryptors []Encryptor
+}
+
+// NewEncryptorRepository creates an empty encryptor repository.
+func NewEncryptorRepository() *EncryptorRepository {
+	return &EncryptorRepository{}
+}
+
+// AddEncryptor adds the encryptor to the repository, trying to keep a minimal
+// set of encryptors. Returns true if the encryptor has not been in the
+// repository yet.
+func (r *EncryptorRepository) AddEncryptor(encryptor Encryptor) bool {
+	newAccessEncryptor, ok := encryptor.(*UplinkEncryptor)
+	if !ok {
+		// This should only happen in unit cases. No need to optimize.
+		r.encryptors = append(r.encryptors, encryptor)
+		return true
+	}
+	newStore := newAccessEncryptor.store
+	newPathCipher := newStore.GetDefaultPathCipher()
+	newKey := newStore.GetDefaultKey()[:]
+
+	for _, oldEncryptor := range r.encryptors {
+		oldAccessEncryptor, ok := oldEncryptor.(*UplinkEncryptor)
+		if !ok {
+			continue
+		}
+		oldStore := oldAccessEncryptor.store
+
+		oldKey := oldStore.GetDefaultKey().Raw()[:]
+		oldPathCipher := oldStore.GetDefaultPathCipher()
+
+		if oldPathCipher == newPathCipher && bytes.Equal(oldKey, newKey) {
+			// Found an identical encryptor, do not add
+			return false
+		}
+	}
+
+	r.encryptors = append(r.encryptors, encryptor)
+	return true
+}
+
+// DecryptObjectDetails tries to decode object key and metadata by all
+// available encryptors. Returns the object key (decrypted on success,
+// encrypted on error) and an error if none of the encryptors succeeded.
+func (r *EncryptorRepository) DecryptMetadata(obj *ObjectInfo) (clearObjectKey string, meta ObjectMetadata, err error) {
+	var encryptor Encryptor
+	meta = obj.Metadata
+
+	for _, encryptor = range r.encryptors {
+		// Try to decrypt path
+		clearObjectKey, err = encryptor.DecryptPath(obj.BucketName, obj.ObjectKey)
+		if err != nil {
+			continue
+		}
+
+		// Try to decrypt metadata
+		err = encryptor.DecryptMetadata(obj.BucketName, clearObjectKey, &meta)
+		if err != nil {
+			continue
+		}
+
+		// If both path and metadata can be encrypted, return with success
+		return
+	}
+
+	return obj.ObjectKey, meta, errors.New("cannot find decryption key for object")
 }
