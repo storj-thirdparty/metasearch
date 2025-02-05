@@ -366,18 +366,13 @@ func (r *EncryptorRepository) CheckEncryptors(maxEncryptors int) {
 	}
 
 	slices.SortFunc(r.encryptors, func(e1 EncryptorRepositoryEntry, e2 EncryptorRepositoryEntry) int {
-		// We compare rational numbers (e1.success/e2.total) vs (e2.success/e2.total) by multiplying both by (e1.total*e2.total)
-		// The result is int64, so we need to make a switch case after that.
-		// The order is reversed to move the most successful encryptors to the top of the list.
-		cmp := e1.success*e2.total - e2.success*e1.total
+		// We compare the encryptors based on the successful encryptions for the total set of queries.
+		// The list is sorted in reverse order.
+		cmp := e2.success - e1.success
 		switch {
-		case e1.total == 0 && e2.total > 0:
-			return 1
-		case e1.total > 0 && e2.total == 0:
-			return -1
-		case cmp < 0:
-			return 1
 		case cmp > 0:
+			return 1
+		case cmp < 0:
 			return -1
 		default:
 			return 0
