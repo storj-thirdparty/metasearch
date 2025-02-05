@@ -357,12 +357,13 @@ func (r *EncryptorRepository) DecryptMetadata(obj *ObjectInfo) (clearObjectKey s
 }
 
 // CheckEncryptors removes unused encryptors if needed.
-func (r *EncryptorRepository) CheckEncryptors(maxEncryptors int) {
+// Returns true if an encryptor was removed.
+func (r *EncryptorRepository) CheckEncryptors(maxEncryptors int) bool {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
 	if len(r.encryptors) <= maxEncryptors {
-		return
+		return false
 	}
 
 	slices.SortFunc(r.encryptors, func(e1 EncryptorRepositoryEntry, e2 EncryptorRepositoryEntry) int {
@@ -380,4 +381,5 @@ func (r *EncryptorRepository) CheckEncryptors(maxEncryptors int) {
 	})
 
 	r.encryptors = r.encryptors[:maxEncryptors]
+	return true
 }

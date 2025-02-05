@@ -143,7 +143,7 @@ func (w *ObjectMigratorWorker) AddEncryptor(encryptor Encryptor) {
 	if w.encryptors.AddEncryptor(encryptor) {
 		// Restart the migration queue if a new encryptor is added, so that
 		// migrations that failed due to decryption errors can be retried.
-		w.log.Info("Adding new encryptor", zap.Stringer("ProjectID", w.projectID))
+		w.log.Info("adding new encryptor", zap.Stringer("Project", w.projectID))
 		w.startTime = nil
 	}
 }
@@ -207,7 +207,7 @@ func (w *ObjectMigratorWorker) MigrateProject(ctx context.Context) error {
 
 	if err != nil {
 		w.log.Warn("error migrating project",
-			zap.Stringer("ProjectID", w.projectID),
+			zap.Stringer("Project", w.projectID),
 			zap.Error(err),
 		)
 	}
@@ -236,7 +236,9 @@ func (w *ObjectMigratorWorker) MigrateObject(ctx context.Context, obj *ObjectInf
 	}
 
 	// Limit number of encryptors
-	w.encryptors.CheckEncryptors(maxEncryptorsPerProject)
+	if w.encryptors.CheckEncryptors(maxEncryptorsPerProject) {
+		w.log.Info("removing encryptor (too many items)", zap.Stringer("Project", obj.ProjectID))
+	}
 
 	// Migrate metadata
 	obj.Metadata = meta
