@@ -143,6 +143,7 @@ func (w *ObjectMigratorWorker) AddEncryptor(encryptor Encryptor) {
 	if w.encryptors.AddEncryptor(encryptor) {
 		// Restart the migration queue if a new encryptor is added, so that
 		// migrations that failed due to decryption errors can be retried.
+		w.log.Info("Adding new encryptor", zap.Stringer("ProjectID", w.projectID))
 		w.startTime = nil
 	}
 }

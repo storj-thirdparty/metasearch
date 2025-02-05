@@ -4,7 +4,6 @@
 package metasearch
 
 import (
-	"bytes"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -59,14 +58,50 @@ var defaultEncryptionParameters = storj.EncryptionParameters{
 
 // UplinkEncryptor encrypts/decrypts paths using the uplink library.
 type UplinkEncryptor struct {
-	store *encryption.Store
+	store        *encryption.Store
+	storeEntries map[UplinkEncryptorStoreEntry]bool
+}
+
+// UplinkEncryptorStoreEntry stores an encryption.Store entry for easy comparison
+type UplinkEncryptorStoreEntry struct {
+	bucket     string
+	root       bool
+	unencPath  paths.Unencrypted
+	encPath    paths.Encrypted
+	key        storj.Key
+	pathCipher storj.CipherSuite
 }
 
 // NewUplinkEncryptor createa a new UplinkEncryptor instance.
 func NewUplinkEncryptor(access *uplink.Access) *UplinkEncryptor {
 	encAccess := accessGetEncAccess(access)
+	storeEntries := make(map[UplinkEncryptorStoreEntry]bool)
+
+	key := encAccess.Store.GetDefaultKey()
+	if key != nil && !key.IsZero() {
+		storeEntry := UplinkEncryptorStoreEntry{
+			root:       true,
+			key:        *key,
+			pathCipher: encAccess.Store.GetDefaultPathCipher(),
+		}
+		storeEntries[storeEntry] = true
+	}
+
+	encAccess.Store.IterateWithCipher(func(bucket string, unencPath paths.Unencrypted, encPath paths.Encrypted, key storj.Key, pathCipher storj.CipherSuite) error {
+		storeEntry := UplinkEncryptorStoreEntry{
+			bucket:     bucket,
+			unencPath:  unencPath,
+			encPath:    encPath,
+			key:        key,
+			pathCipher: pathCipher,
+		}
+		storeEntries[storeEntry] = true
+		return nil
+	})
+
 	return &UplinkEncryptor{
-		store: encAccess.Store,
+		store:        encAccess.Store,
+		storeEntries: storeEntries,
 	}
 }
 
@@ -212,21 +247,35 @@ func (e *UplinkEncryptor) DecryptMetadata(bucket string, path string, meta *Obje
 }
 
 func (e *UplinkEncryptor) Compare(other Encryptor) EncryptorComparisonResult {
+	subset := 0
+	superset := 0
+
 	oe, ok := other.(*UplinkEncryptor)
 	if !ok {
 		return EncryptorComparisonDifferent
 	}
 
-	currentKey := e.store.GetDefaultKey().Raw()[:]
-	currentPathCipher := e.store.GetDefaultPathCipher()
-
-	otherPathCipher := oe.store.GetDefaultPathCipher()
-	otherKey := oe.store.GetDefaultKey()[:]
-
-	if currentPathCipher == otherPathCipher && bytes.Equal(currentKey, otherKey) {
-		return EncryptorComparisonIdentical
+	for storeEntry := range e.storeEntries {
+		if _, ok := oe.storeEntries[storeEntry]; !ok {
+			superset++
+		}
 	}
-	return EncryptorComparisonDifferent
+	for storeEntry := range oe.storeEntries {
+		if _, ok := e.storeEntries[storeEntry]; !ok {
+			subset++
+		}
+	}
+
+	switch {
+	case subset == 0 && superset == 0:
+		return EncryptorComparisonIdentical
+	case subset > 0 && superset == 0:
+		return EncryptorComparisonSubset
+	case subset == 0 && superset > 0:
+		return EncryptorComparisonSuperset
+	default:
+		return EncryptorComparisonDifferent
+	}
 }
 
 // EncryptorRepository maintains a set of encryptors for a project, and tries
@@ -252,21 +301,28 @@ func NewEncryptorRepository() *EncryptorRepository {
 
 // AddEncryptor adds the encryptor to the repository, trying to keep a minimal
 // set of encryptors. Returns true if the encryptor has not been in the
-// repository yet.
-func (r *EncryptorRepository) AddEncryptor(encryptor Encryptor) bool {
+// repository yet, or if it replaced an existing item because it is a superset.
+func (r *EncryptorRepository) AddEncryptor(newEncryptor Encryptor) bool {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	for _, entry := range r.encryptors {
-		cmp := encryptor.Compare(entry.encryptor)
-		if cmp == EncryptorComparisonIdentical {
+	newEntry := EncryptorRepositoryEntry{
+		encryptor: newEncryptor,
+	}
+
+	for i := range len(r.encryptors) {
+		entry := r.encryptors[i]
+		cmp := newEncryptor.Compare(entry.encryptor)
+		if cmp == EncryptorComparisonIdentical || cmp == EncryptorComparisonSubset {
 			return false
+		}
+		if cmp == EncryptorComparisonSuperset {
+			r.encryptors[i] = newEntry
+			return true
 		}
 	}
 
-	r.encryptors = append(r.encryptors, EncryptorRepositoryEntry{
-		encryptor: encryptor,
-	})
+	r.encryptors = append(r.encryptors, newEntry)
 	return true
 }
 
