@@ -35,7 +35,20 @@ type Encryptor interface {
 	// DecryptMetadata decrypts the user metadata of an object.
 	// The path parameter must be unencrypted.
 	DecryptMetadata(bucket string, path string, meta *ObjectMetadata) error
+
+	// Compare two encryptors
+	Compare(other Encryptor) EncryptorComparisonResult
 }
+
+// EncryptorComparisonResult is an enum that describes the relationship between two encryptors.
+type EncryptorComparisonResult int
+
+const (
+	EncryptorComparisonIdentical EncryptorComparisonResult = 0
+	EncryptorComparisonSubset    EncryptorComparisonResult = iota
+	EncryptorComparisonSuperset  EncryptorComparisonResult = iota
+	EncryptorComparisonDifferent EncryptorComparisonResult = iota
+)
 
 // NOTE: this hardcoded value comes from uplink.OpenProject(). It may be moved
 // to EncryptionAccess in the future.
@@ -198,6 +211,24 @@ func (e *UplinkEncryptor) DecryptMetadata(bucket string, path string, meta *Obje
 	return nil
 }
 
+func (e *UplinkEncryptor) Compare(other Encryptor) EncryptorComparisonResult {
+	oe, ok := other.(*UplinkEncryptor)
+	if !ok {
+		return EncryptorComparisonDifferent
+	}
+
+	currentKey := e.store.GetDefaultKey().Raw()[:]
+	currentPathCipher := e.store.GetDefaultPathCipher()
+
+	otherPathCipher := oe.store.GetDefaultPathCipher()
+	otherKey := oe.store.GetDefaultKey()[:]
+
+	if currentPathCipher == otherPathCipher && bytes.Equal(currentKey, otherKey) {
+		return EncryptorComparisonIdentical
+	}
+	return EncryptorComparisonDifferent
+}
+
 // EncryptorRepository maintains a set of encryptors for a project, and tries
 // the find the best encryptor for an object.
 type EncryptorRepository struct {
@@ -226,36 +257,16 @@ func (r *EncryptorRepository) AddEncryptor(encryptor Encryptor) bool {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	newEntry := EncryptorRepositoryEntry{
-		encryptor: encryptor,
-	}
-	newAccessEncryptor, ok := encryptor.(*UplinkEncryptor)
-	if !ok {
-		// This should only happen in unit cases. No need to optimize.
-		r.encryptors = append(r.encryptors, newEntry)
-		return true
-	}
-	newStore := newAccessEncryptor.store
-	newPathCipher := newStore.GetDefaultPathCipher()
-	newKey := newStore.GetDefaultKey()[:]
-
 	for _, entry := range r.encryptors {
-		oldAccessEncryptor, ok := entry.encryptor.(*UplinkEncryptor)
-		if !ok {
-			continue
-		}
-		oldStore := oldAccessEncryptor.store
-
-		oldKey := oldStore.GetDefaultKey().Raw()[:]
-		oldPathCipher := oldStore.GetDefaultPathCipher()
-
-		if oldPathCipher == newPathCipher && bytes.Equal(oldKey, newKey) {
-			// Found an identical encryptor, do not add
+		cmp := encryptor.Compare(entry.encryptor)
+		if cmp == EncryptorComparisonIdentical {
 			return false
 		}
 	}
 
-	r.encryptors = append(r.encryptors, newEntry)
+	r.encryptors = append(r.encryptors, EncryptorRepositoryEntry{
+		encryptor: encryptor,
+	})
 	return true
 }
 

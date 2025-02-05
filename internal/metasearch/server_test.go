@@ -125,7 +125,8 @@ func (a *mockAuth) Authenticate(ctx context.Context, r *http.Request) (uuid.UUID
 }
 
 type mockEncryptor struct {
-	restrictPrefix string
+	restrictPrefix   string
+	comparisonResult map[*mockEncryptor]EncryptorComparisonResult
 }
 
 func (e *mockEncryptor) EncryptPath(_ string, p string) (string, error) {
@@ -154,6 +155,18 @@ func (e *mockEncryptor) DecryptMetadata(bucket string, path string, meta *Object
 	err := json.Unmarshal(meta.EncryptedMetadata, &obj)
 	meta.ClearMetadata = obj
 	return err
+}
+
+func (e *mockEncryptor) Compare(other Encryptor) EncryptorComparisonResult {
+	m, ok := other.(*mockEncryptor)
+	if !ok {
+		return EncryptorComparisonDifferent
+	}
+	c, ok := e.comparisonResult[m]
+	if !ok {
+		return EncryptorComparisonDifferent
+	}
+	return c
 }
 
 // Utility functions
