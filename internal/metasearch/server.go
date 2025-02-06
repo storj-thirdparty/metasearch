@@ -25,7 +25,7 @@ import (
 type Server struct {
 	Logger   *zap.Logger
 	Repo     MetaSearchRepo
-	Auth     Auth
+	Auth     Authenticator
 	Endpoint string
 	Handler  http.Handler
 	Migrator *ObjectMigrator
@@ -33,8 +33,9 @@ type Server struct {
 
 // BaseRequest contains common fields for all requests.
 type BaseRequest struct {
-	ProjectID uuid.UUID      `json:"-"`
-	Location  ObjectLocation `json:"-"`
+	ProjectID  uuid.UUID      `json:"-"`
+	Location   ObjectLocation `json:"-"`
+	Authorizer Authorizer     `json:"-"`
 
 	Encryptor         Encryptor      `json:"-"`
 	EncryptedLocation ObjectLocation `json:"-"`
@@ -79,7 +80,7 @@ type SearchResult struct {
 }
 
 // NewServer creates a new metasearch server process.
-func NewServer(log *zap.Logger, repo MetaSearchRepo, auth Auth, endpoint string) (*Server, error) {
+func NewServer(log *zap.Logger, repo MetaSearchRepo, auth Authenticator, endpoint string) (*Server, error) {
 	s := &Server{
 		Logger:   log,
 		Repo:     repo,
@@ -111,10 +112,12 @@ func (s *Server) Run() error {
 
 func (s *Server) validateRequest(ctx context.Context, r *http.Request, baseRequest *BaseRequest, body interface{}) error {
 	// Parse authorization header
-	projectID, encryptor, err := s.Auth.Authenticate(ctx, r)
+	projectID, encryptor, authorizer, err := s.Auth.Authenticate(ctx, r)
 	if err != nil {
 		return err
 	}
+	baseRequest.Authorizer = authorizer
+
 	s.Migrator.AddProject(ctx, projectID, encryptor)
 	if !s.Migrator.WaitForProject(ctx, projectID, migrationTimeout) {
 		return fmt.Errorf("%w: metadata is being indexed", ErrServiceUnavailable)
@@ -141,7 +144,7 @@ func (s *Server) validateRequest(ctx context.Context, r *http.Request, baseReque
 	// Encrypt location
 	encKey, err := encryptor.EncryptPath(bucket, key)
 	if err != nil {
-		return fmt.Errorf("%w: cannot encrypt path: %s", ErrInternalError, key)
+		return fmt.Errorf("%w: the access token does not have permission for path '%s'", ErrAuthorizationFailed, key)
 	}
 
 	baseRequest.EncryptedLocation = ObjectLocation{
@@ -158,6 +161,12 @@ func (s *Server) HandleGet(w http.ResponseWriter, r *http.Request) {
 	var request BaseRequest
 
 	err := s.validateRequest(ctx, r, &request, nil)
+	if err != nil {
+		s.errorResponse(w, err)
+		return
+	}
+
+	err = request.Authorizer.Authorize(ctx, request.EncryptedLocation, ActionReadMetadata)
 	if err != nil {
 		s.errorResponse(w, err)
 		return
@@ -182,6 +191,12 @@ func (s *Server) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	var result SearchResponse
 
 	err := s.validateSearchRequest(ctx, r, &request)
+	if err != nil {
+		s.errorResponse(w, err)
+		return
+	}
+
+	err = request.Authorizer.Authorize(ctx, request.EncryptedLocation, ActionQueryMetadata)
 	if err != nil {
 		s.errorResponse(w, err)
 		return
@@ -225,7 +240,7 @@ func (s *Server) validateSearchRequest(ctx context.Context, r *http.Request, req
 	if keyPrefix != "" {
 		encPrefix, err := request.Encryptor.EncryptPath(request.Location.BucketName, keyPrefix)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: the access token does not have permission for path '%s'", ErrAuthorizationFailed, keyPrefix)
 		}
 		request.Location.ObjectKey = keyPrefix + "/"
 		request.EncryptedLocation.ObjectKey = string(encPrefix) + "/"
@@ -341,6 +356,12 @@ func (s *Server) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	err = request.Authorizer.Authorize(ctx, request.EncryptedLocation, ActionWriteMetadata)
+	if err != nil {
+		s.errorResponse(w, err)
+		return
+	}
+
 	meta := ObjectMetadata{
 		ClearMetadata: metadata,
 	}
@@ -366,6 +387,12 @@ func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	var request BaseRequest
 
 	err := s.validateRequest(ctx, r, &request, nil)
+	if err != nil {
+		s.errorResponse(w, err)
+		return
+	}
+
+	err = request.Authorizer.Authorize(ctx, request.EncryptedLocation, ActionDeleteMetadata)
 	if err != nil {
 		s.errorResponse(w, err)
 		return

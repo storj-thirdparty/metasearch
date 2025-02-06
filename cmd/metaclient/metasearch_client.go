@@ -149,7 +149,7 @@ func (c *MetaSearchClient) SearchMetadata(ctx context.Context, bucket string, pr
 func httpError(resp *http.Response) error {
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
-		return errors.New("unauthorized")
+		return errors.New("unauthorized request")
 	case http.StatusNotFound:
 		return errors.New("object not found")
 	default:

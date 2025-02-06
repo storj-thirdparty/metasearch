@@ -118,10 +118,16 @@ func (r *mockRepo) queuedForMigration(bucket string, key string) bool {
 
 // Mock authentication
 
-type mockAuth struct{}
+type mockAuthenticator struct{}
 
-func (a *mockAuth) Authenticate(ctx context.Context, r *http.Request) (uuid.UUID, Encryptor, error) {
-	return uuid.UUID{}, &mockEncryptor{}, nil
+func (a *mockAuthenticator) Authenticate(ctx context.Context, r *http.Request) (uuid.UUID, Encryptor, Authorizer, error) {
+	return uuid.UUID{}, &mockEncryptor{}, &mockAuthorizer{}, nil
+}
+
+type mockAuthorizer struct{}
+
+func (a *mockAuthorizer) Authorize(ctx context.Context, encryptedLocation ObjectLocation, action Action) error {
+	return nil
 }
 
 type mockEncryptor struct {
@@ -175,7 +181,7 @@ const testProjectID = "12345678-1234-5678-9999-1234567890ab"
 
 func testServer() *Server {
 	repo := newMockRepo()
-	auth := &mockAuth{}
+	auth := &mockAuthenticator{}
 	logger, _ := zap.NewDevelopment()
 	server, _ := NewServer(logger, repo, auth, "")
 	return server

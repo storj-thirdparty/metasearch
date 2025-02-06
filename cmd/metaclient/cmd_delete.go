@@ -62,9 +62,5 @@ func (c *cmdDelete) Execute(ctx context.Context) (err error) {
 	}
 
 	client := newMetaSearchClient(c.access)
-	err = client.DeleteObjectMetadata(ctx, c.bucket, c.key)
-	if err != nil {
-		return fmt.Errorf("cannot format metadata: %w", err)
-	}
-	return nil
+	return client.DeleteObjectMetadata(ctx, c.bucket, c.key)
 }

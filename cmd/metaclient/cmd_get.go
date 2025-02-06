@@ -65,7 +65,7 @@ func (c *cmdGet) Execute(ctx context.Context) (err error) {
 	client := newMetaSearchClient(c.access)
 	meta, err := client.GetObjectMetadata(ctx, c.bucket, c.key)
 	if err != nil {
-		return fmt.Errorf("cannot format metadata: %w", err)
+		return err
 	}
 
 	formattedMeta, err := json.MarshalIndent(meta, "", "  ")
