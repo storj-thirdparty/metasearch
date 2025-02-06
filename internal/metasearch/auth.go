@@ -15,6 +15,7 @@ import (
 	"storj.io/common/uuid"
 	"storj.io/storj/satellite"
 	"storj.io/storj/satellite/console"
+	"storj.io/storj/satellite/revocation"
 
 	"storj.io/uplink"
 )
@@ -78,7 +79,7 @@ func (a *HeaderAuth) Authenticate(ctx context.Context, r *http.Request) (project
 	projectID = keyInfo.ProjectID
 
 	encryptor = NewUplinkEncryptor(access)
-	authorizer = NewAPIKeyAuthorizer(access, apiKey, keyInfo)
+	authorizer = NewAPIKeyAuthorizer(access, apiKey, keyInfo, a.db.Revocation())
 
 	return
 }
@@ -100,21 +101,23 @@ const (
 
 // APIKeyAuthorizer authorizes requests using storj macaroons.
 type APIKeyAuthorizer struct {
-	access  *uplink.Access
-	store   *encryption.Store
-	apiKey  *macaroon.APIKey
-	keyInfo *console.APIKeyInfo
+	access     *uplink.Access
+	store      *encryption.Store
+	apiKey     *macaroon.APIKey
+	keyInfo    *console.APIKeyInfo
+	revocation revocation.DB
 }
 
 // NewAPIKeyAuthorizer creates an APIKey based authorizer.
-func NewAPIKeyAuthorizer(access *uplink.Access, apiKey *macaroon.APIKey, keyInfo *console.APIKeyInfo) *APIKeyAuthorizer {
+func NewAPIKeyAuthorizer(access *uplink.Access, apiKey *macaroon.APIKey, keyInfo *console.APIKeyInfo, revocation revocation.DB) *APIKeyAuthorizer {
 	encAccess := accessGetEncAccess(access)
 
 	return &APIKeyAuthorizer{
-		access:  access,
-		store:   encAccess.Store,
-		apiKey:  apiKey,
-		keyInfo: keyInfo,
+		access:     access,
+		store:      encAccess.Store,
+		apiKey:     apiKey,
+		keyInfo:    keyInfo,
+		revocation: revocation,
 	}
 }
 
@@ -123,13 +126,12 @@ func (a *APIKeyAuthorizer) Authorize(ctx context.Context, encryptedLocation Obje
 		return fmt.Errorf("%w: the access token does not have permission for the whole bucket", ErrAuthorizationFailed)
 	}
 
-	// TODO: handle revocations
 	err := a.apiKey.Check(ctx, a.keyInfo.Secret, a.keyInfo.Version, macaroon.Action{
 		Op:            macaroon.ActionType(action),
 		Bucket:        []byte(encryptedLocation.BucketName),
 		EncryptedPath: []byte(encryptedLocation.ObjectKey),
 		Time:          time.Now(),
-	}, nil)
+	}, a.revocation)
 
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAuthorizationFailed, err)
