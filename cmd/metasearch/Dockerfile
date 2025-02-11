@@ -9,7 +9,6 @@ ENV PATH=$PATH:/app
 EXPOSE 6666
 WORKDIR /app
 
-COPY cmd/metasearch/migration /app/migration
 COPY cmd/metasearch/metasearch /app/metasearch
 COPY cmd/metasearch/entrypoint /entrypoint
  
