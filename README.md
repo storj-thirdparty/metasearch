@@ -10,6 +10,14 @@ be started alongside of an Storj Satellite installation
 - The [metaclient](cmd/metaclient) CLI implements CRUD and search functionality
 for the metadata.
 
+## Configuring local develpment
+
+1. Install Satellite with storj-up
+2. Build `cmd/metasearch` and `cmd/metaclient` (`go build .`)
+3. Configure metasearch: `./metasearch setup`
+4. Migrate database: `./metasearch migrate`
+5. Run metasearch: `./metasearch run`
+
 ## Design
 
 The goal of the design was to provide a completely bolt-on solution with
