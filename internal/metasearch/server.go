@@ -250,7 +250,7 @@ func (s *Server) validateSearchRequest(ctx context.Context, r *http.Request, req
 	if request.Filter != "" {
 		request.filterPath, err = jmespath.Compile(request.Filter)
 		if err != nil {
-			return fmt.Errorf("%w: invalid filter expression: %v", ErrBadRequest, err)
+			return jmespathError("invalid filter expression", err)
 		}
 	}
 
@@ -258,7 +258,7 @@ func (s *Server) validateSearchRequest(ctx context.Context, r *http.Request, req
 	if request.Projection != "" {
 		request.projectionPath, err = jmespath.Compile(request.Projection)
 		if err != nil {
-			return fmt.Errorf("%w: invalid projection expression: %v", ErrBadRequest, err)
+			return jmespathError("invalid projection expression", err)
 		}
 	}
 
@@ -481,4 +481,15 @@ func parsePageToken(s string) (ObjectLocation, error) {
 		ObjectKey:  objectKey,
 		Version:    version,
 	}, nil
+}
+
+func jmespathError(msg string, err error) error {
+	var syntaxError jmespath.SyntaxError
+	if errors.As(err, &syntaxError) {
+		return &ErrorResponse{
+			StatusCode: 400,
+			Message:    fmt.Sprintf("%s: %s\n\n%s", msg, err.Error(), syntaxError.HighlightLocation()),
+		}
+	}
+	return fmt.Errorf("%w: %s", ErrBadRequest, msg)
 }

@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -66,14 +67,14 @@ func (c *cmdSearch) Validate() (err error) {
 	if c.filter != "" {
 		_, err = jmespath.Compile(c.filter)
 		if err != nil {
-			return fmt.Errorf("invalid filter expression: %w", err)
+			return jmespathError("invalid filter expression", err)
 		}
 	}
 
 	if c.projection != "" {
 		_, err = jmespath.Compile(c.projection)
 		if err != nil {
-			return fmt.Errorf("invalid projection expression: %w", err)
+			return jmespathError("invalid projection expression", err)
 		}
 	}
 
@@ -145,4 +146,12 @@ func (c *cmdSearch) setMatch() (err error) {
 	}
 
 	return nil
+}
+
+func jmespathError(msg string, err error) error {
+	var syntaxError jmespath.SyntaxError
+	if errors.As(err, &syntaxError) {
+		return fmt.Errorf("%s: %w\n\n%s", msg, err, syntaxError.HighlightLocation())
+	}
+	return fmt.Errorf("%s: %w", msg, err)
 }
