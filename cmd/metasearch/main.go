@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
+	_ "embed"
+
 	"github.com/spf13/cobra"
 	"github.com/zeebo/errs"
 	"go.uber.org/zap"
@@ -35,6 +37,11 @@ var (
 		Short:       "Create config files",
 		RunE:        cmdSetup,
 		Annotations: map[string]string{"type": "setup"},
+	}
+	migrateCmd = &cobra.Command{
+		Use:   "migrate",
+		Short: "Migrates database to be suitable for metasearch",
+		RunE:  cmdMigrate,
 	}
 	runCmd = &cobra.Command{
 		Use:   "run",
@@ -112,13 +119,38 @@ func cmdRun(cmd *cobra.Command, args []string) (err error) {
 	return metadataAPI.Run()
 }
 
+//go:embed migration/001.objects.clear_metadata_metasearch_queued_at.sql
+var migrateSql string
+
+func cmdMigrate(cmd *cobra.Command, args []string) (err error) {
+	ctx, _ := process.Ctx(cmd)
+	log := zap.L()
+
+	metadb, err := tagsql.Open(ctx, "cockroach", runCfg.MetabaseURL)
+	if err != nil {
+		return errs.New("failed to connect to metabase db: %+v", err)
+	}
+	defer func() {
+		err = errs.Combine(err, metadb.Close())
+	}()
+
+	log.Info("running database migrations")
+	_, err = metadb.ExecContext(ctx, migrateSql)
+	if err != nil {
+		log.Error("database migration failed", zap.Error(err))
+	}
+	return
+}
+
 func init() {
 	defaultConfDir := fpath.ApplicationDir("storj", "metasearch")
 	cfgstruct.SetupFlag(zap.L(), rootCmd, &confDir, "config-dir", defaultConfDir, "main directory for satellite configuration")
 	defaults := cfgstruct.DefaultsFlag(rootCmd)
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(setupCmd)
+	rootCmd.AddCommand(migrateCmd)
 	process.Bind(runCmd, &runCfg, defaults, cfgstruct.ConfDir(confDir))
+	process.Bind(migrateCmd, &runCfg, defaults, cfgstruct.ConfDir(confDir))
 	process.Bind(setupCmd, &setupCfg, defaults, cfgstruct.ConfDir(confDir), cfgstruct.SetupMode())
 }
 
