@@ -116,7 +116,7 @@ is performed on the items that are already fetched. It is also possible to get
 empty pages if the filter condition removes all items.
 
 3. Users can also specify a `projection` field, which is also an arbitrary
-JMESPath](https://jmespath.org) expression. `metasearch` transforms the
+[JMESPath](https://jmespath.org) expression. `metasearch` transforms the
 metadata objects with it, and returns the transformed JSON objects to the user.
 This is useful if the user only wants to receive a small subset of the stored
 metadata. It is analogous to DynamoDB's ProjectionExpression: it does not
@@ -193,4 +193,3 @@ $ ./metaclient search sj://bucketname --match '{"foo":"bar"}' --filter 'n > `1`'
   }
 ]
 ```
-
