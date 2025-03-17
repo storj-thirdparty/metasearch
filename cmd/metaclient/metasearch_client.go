@@ -146,7 +146,19 @@ func (c *MetaSearchClient) SearchMetadata(ctx context.Context, bucket string, pr
 	return result, nil
 }
 
+type errorResponse struct {
+	Error string `json:"error"`
+}
+
 func httpError(resp *http.Response) error {
+	// Try to parse error
+	parsedError := errorResponse{}
+	err := json.NewDecoder(resp.Body).Decode(&parsedError)
+	if err == nil && parsedError.Error != "" {
+		return errors.New(parsedError.Error)
+	}
+
+	// Return error based on status code
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
 		return errors.New("unauthorized request")
