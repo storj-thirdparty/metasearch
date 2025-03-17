@@ -29,6 +29,6 @@ var (
 	// ErrServiceUnavailable is returned when the service is not ready to server requests.
 	ErrServiceUnavailable = &ErrorResponse{StatusCode: 503, Message: "service unavailable"}
 
-	// ErrMetadataMigrationInProgress is returned when the service is not ready to server requests because object migration is running.
-	ErrMetadataMigrationInProgress = &ErrorResponse{StatusCode: 503, Message: "metadata migration in progress"}
+	// ErrMetadataIndexingInProgress is returned when the service is not ready to server requests because object migration is running.
+	ErrMetadataIndexingInProgress = &ErrorResponse{StatusCode: 503, Message: "metadata indexing in progress"}
 )

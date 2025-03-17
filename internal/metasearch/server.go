@@ -120,7 +120,7 @@ func (s *Server) validateRequest(ctx context.Context, r *http.Request, baseReque
 
 	s.Migrator.AddProject(ctx, projectID, encryptor)
 	if !s.Migrator.WaitForProject(ctx, projectID, migrationTimeout) {
-		return fmt.Errorf("%w: metadata is being indexed", ErrMetadataMigrationInProgress)
+		return ErrMetadataIndexingInProgress
 	}
 
 	// Decode request body
