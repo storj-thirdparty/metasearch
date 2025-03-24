@@ -1,6 +1,6 @@
-ARG DOCKER_ARCH
+ARG BUILDPLATFORM
 
-FROM ${DOCKER_ARCH:-amd64}/golang:1.23 AS build-stage
+FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.23 AS build-stage
 
 WORKDIR /app
 
@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /app/metasearch cmd/metasearch/main.go
 FROM build-stage AS run-test-stage
 RUN go test -v ./...
 
-FROM gcr.io/distroless/base-debian11 AS build-release-stage
+FROM --platform=${BUILDPLATFORM:-linux/amd64} gcr.io/distroless/base-debian11 AS build-release-stage
 
 WORKDIR /app
 
