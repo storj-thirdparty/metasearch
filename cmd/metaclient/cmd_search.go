@@ -94,12 +94,15 @@ func (c *cmdSearch) Execute(ctx context.Context) (err error) {
 
 	client := newMetaSearchClient(c.access)
 	pageToken := ""
-	fmt.Print("[")
 	n := 0
 	for i := 0; i == 0 || pageToken != ""; i++ {
 		page, err := client.SearchMetadata(ctx, c.bucket, c.prefix, c.match, c.filter, c.projection, pageToken)
 		if err != nil {
 			return fmt.Errorf("error performing metadata search: %w", err)
+		}
+
+		if i == 0 {
+			fmt.Print("[")
 		}
 
 		for _, meta := range page.Results {
