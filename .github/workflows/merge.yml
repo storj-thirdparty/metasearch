@@ -23,6 +23,6 @@ jobs:
         with:
           context: .
           push: true
-          #tags: storj-thirdparty/metasearch:latest
+          tags: ghcr.io/storj-thirdparty/metasearch:latest
           #cache-from: type=registry,ref=storj-thirdparty/metasearch:latest
           #cache-to: type=inline
