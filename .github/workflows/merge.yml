@@ -19,10 +19,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: storj-thirdparty/metasearch:latest
-          cache-from: type=registry,ref=storj-thirdparty/metasearch:latest
-          cache-to: type=inline
+          #tags: storj-thirdparty/metasearch:latest
+          #cache-from: type=registry,ref=storj-thirdparty/metasearch:latest
+          #cache-to: type=inline
