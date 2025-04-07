@@ -22,6 +22,6 @@ ENV PATH=$PATH:/app
 EXPOSE 6666
 
 COPY --from=build-stage /app/metasearch /app/metasearch
-COPY --from=build-stage /cmd/metasearch/entrypoint /entrypoint
+COPY cmd/metasearch/entrypoint /entrypoint
 
 ENTRYPOINT ["/entrypoint"]
