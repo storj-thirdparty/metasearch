@@ -23,7 +23,7 @@ ENV CONF_PATH=/root/.local/share/storj/metasearch
 ENV PATH=$PATH:/app
 EXPOSE 6666
 
-COPY --from=busybox /bin/bash /bin/bash
+COPY --from=busybox /bin/sh /bin/sh
 COPY --from=build-stage /app/metasearch /app/metasearch
 COPY cmd/metasearch/entrypoint /entrypoint
 

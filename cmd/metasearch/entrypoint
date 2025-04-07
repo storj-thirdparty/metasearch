@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -euo pipefail
 
 RUN_PARAMS="${RUN_PARAMS:-} --config-dir ${CONF_PATH}"
